@@ -1,5 +1,5 @@
 mod app;
-use crate::app::TemplateApp;
+use crate::app::AnnotoApp;
 use eframe::wasm_bindgen::JsCast as _;
 
 fn main() {
@@ -25,7 +25,7 @@ fn main() {
             .start(
                 canvas,
                 web_options,
-                Box::new(|cc| Ok(Box::new(TemplateApp::new(cc)))),
+                Box::new(|cc| Ok(Box::new(AnnotoApp::new(cc)))),
             )
             .await;
 
