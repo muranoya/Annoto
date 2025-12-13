@@ -5,36 +5,16 @@ use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
 use web_sys::{File, FileReader, HtmlInputElement};
 
+use crate::canvas_items::*;
+use crate::drawing_tool::DrawingTool;
+use crate::history::History;
+
 struct AppState {
     image_bytes: Option<Vec<u8>>,
 }
 
 static APP_STATE: Lazy<Arc<Mutex<AppState>>> =
     Lazy::new(|| Arc::new(Mutex::new(AppState { image_bytes: None })));
-
-enum CanvasItem {
-    StrokeRect(StrokeRect),
-    FilledRect(FilledRect),
-}
-
-struct FilledRect {
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-
-    filled_color: egui::Color32,
-}
-
-struct StrokeRect {
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-
-    stroke_width: f32,
-    stroke_color: egui::Color32,
-}
 
 pub struct AnnotoApp {
     image_texture: Option<egui::TextureHandle>,
@@ -49,6 +29,8 @@ pub struct AnnotoApp {
     stroke_color: egui::Color32,
     fill_enabled: bool,
     fill_color: egui::Color32,
+    history: History,
+    current_tool: DrawingTool,
 }
 
 impl Default for AnnotoApp {
@@ -65,6 +47,8 @@ impl Default for AnnotoApp {
             stroke_color: egui::Color32::RED,
             fill_enabled: false,
             fill_color: egui::Color32::from_rgba_premultiplied(255, 0, 0, 128),
+            history: History::new(),
+            current_tool: DrawingTool::StrokeRect,
         }
     }
 }
@@ -141,6 +125,15 @@ impl AnnotoApp {
 
 impl eframe::App for AnnotoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_image_loading(ctx);
+        self.render_top_panel(ctx);
+        self.render_side_panel(ctx);
+        self.render_central_panel(ctx);
+    }
+}
+
+impl AnnotoApp {
+    fn handle_image_loading(&mut self, ctx: &egui::Context) {
         if let Some(bytes) = APP_STATE.lock().unwrap().image_bytes.take() {
             if let Ok(img) = image::load_from_memory(&bytes) {
                 let rgba = img.to_rgba8();
@@ -151,7 +144,9 @@ impl eframe::App for AnnotoApp {
                     Some(ctx.load_texture("image", color_image, egui::TextureOptions::default()));
             }
         }
+    }
 
+    fn render_top_panel(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -159,6 +154,19 @@ impl eframe::App for AnnotoApp {
                         Self::open_file_dialog();
                     }
                 });
+                ui.add_space(16.0);
+                if ui.button("Undo").clicked() {
+                    if let Some(state) = self.history.undo() {
+                        self.rectangles = state;
+                        self.selected_index = None;
+                    }
+                }
+                if ui.button("Redo").clicked() {
+                    if let Some(state) = self.history.redo() {
+                        self.rectangles = state;
+                        self.selected_index = None;
+                    }
+                }
                 ui.add_space(16.0);
                 ui.label("倍率:");
                 ui.add(
@@ -168,7 +176,9 @@ impl eframe::App for AnnotoApp {
                 );
             });
         });
+    }
 
+    fn render_side_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
             ui.label(if self.drawing_mode {
                 "描画モード"
@@ -186,6 +196,32 @@ impl eframe::App for AnnotoApp {
                 self.drawing_mode = !self.drawing_mode;
             }
             ui.add_space(16.0);
+            ui.label("描画ツール");
+            if ui
+                .selectable_label(
+                    matches!(self.current_tool, DrawingTool::StrokeRect),
+                    "四角形",
+                )
+                .clicked()
+            {
+                self.current_tool = DrawingTool::StrokeRect;
+            }
+            if ui
+                .selectable_label(
+                    matches!(self.current_tool, DrawingTool::FilledRect),
+                    "塗りつぶし四角形",
+                )
+                .clicked()
+            {
+                self.current_tool = DrawingTool::FilledRect;
+            }
+            if ui
+                .selectable_label(matches!(self.current_tool, DrawingTool::Arrow), "矢印")
+                .clicked()
+            {
+                self.current_tool = DrawingTool::Arrow;
+            }
+            ui.add_space(16.0);
             ui.label("線の太さ:");
             ui.add(
                 egui::DragValue::new(&mut self.stroke_width)
@@ -195,13 +231,50 @@ impl eframe::App for AnnotoApp {
             ui.add_space(16.0);
             ui.label("線の色:");
             ui.color_edit_button_srgba(&mut self.stroke_color);
-            ui.add_space(16.0);
-            ui.checkbox(&mut self.fill_enabled, "塗りつぶし");
-            if self.fill_enabled {
+            if matches!(self.current_tool, DrawingTool::FilledRect) {
+                ui.add_space(16.0);
+                ui.label("塗りつぶし色:");
                 ui.color_edit_button_srgba(&mut self.fill_color);
             }
+            ui.add_space(16.0);
+            if let Some(index) = self.selected_index {
+                ui.label("選択アイテム編集");
+                if ui.button("削除").clicked() {
+                    self.rectangles.remove(index);
+                    self.selected_index = None;
+                    self.history.push(self.rectangles.clone());
+                }
+                match &mut self.rectangles[index] {
+                    CanvasItem::StrokeRect(rect) => {
+                        ui.label("線の色:");
+                        ui.color_edit_button_srgba(&mut rect.stroke_color);
+                        ui.label("線の太さ:");
+                        ui.add(
+                            egui::DragValue::new(&mut rect.stroke_width)
+                                .range(1..=50)
+                                .suffix("px"),
+                        );
+                    }
+                    CanvasItem::FilledRect(rect) => {
+                        ui.label("塗りつぶし色:");
+                        ui.color_edit_button_srgba(&mut rect.filled_color);
+                    }
+                    CanvasItem::Arrow(arrow) => {
+                        ui.label("線の色:");
+                        ui.color_edit_button_srgba(&mut arrow.color);
+                        ui.label("線の太さ:");
+                        ui.add(
+                            egui::DragValue::new(&mut arrow.width)
+                                .range(1..=50)
+                                .suffix("px"),
+                        );
+                    }
+                }
+            }
         });
+    }
 
+    fn render_central_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(texture) = &self.image_texture {
                 let scale = self.zoom / 100.0;
@@ -218,144 +291,155 @@ impl eframe::App for AnnotoApp {
                     egui::Color32::WHITE,
                 );
 
-                // 描画モード時の処理
-                if self.drawing_mode {
-                    let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-                    if let Some(pos) = pointer_pos {
-                        if image_rect.contains(pos) {
-                            if image_response.drag_started() {
-                                self.drag_start = Some(pos);
-                            }
-                            if image_response.drag_stopped() {
-                                if let Some(start) = self.drag_start {
-                                    let end = pos;
+                self.handle_drawing_mode(ui, &image_response, image_rect, scale);
+                self.render_existing_items(ui, image_rect, scale);
+                self.render_drag_preview(ui, image_rect, scale);
+            }
+        });
+    }
+
+    fn handle_drawing_mode(
+        &mut self,
+        ui: &mut egui::Ui,
+        image_response: &egui::Response,
+        image_rect: egui::Rect,
+        scale: f32,
+    ) {
+        if self.drawing_mode {
+            let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+            if let Some(pos) = pointer_pos {
+                if image_rect.contains(pos) {
+                    if image_response.drag_started() {
+                        self.drag_start = Some(pos);
+                    }
+                    if image_response.drag_stopped() {
+                        if let Some(start) = self.drag_start {
+                            let end = pos;
+                            match self.current_tool {
+                                DrawingTool::StrokeRect => {
                                     let min = egui::pos2(start.x.min(end.x), start.y.min(end.y));
                                     let max = egui::pos2(start.x.max(end.x), start.y.max(end.y));
                                     let offset_min = (min - image_rect.min) / scale;
                                     let offset_max = (max - image_rect.min) / scale;
-                                    if self.fill_enabled {
-                                        self.rectangles.push(CanvasItem::FilledRect(FilledRect {
-                                            x1: offset_min.x,
-                                            y1: offset_min.y,
-                                            x2: offset_max.x,
-                                            y2: offset_max.y,
-                                            filled_color: self.fill_color,
-                                        }));
-                                    } else {
-                                        self.rectangles.push(CanvasItem::StrokeRect(StrokeRect {
-                                            x1: offset_min.x,
-                                            y1: offset_min.y,
-                                            x2: offset_max.x,
-                                            y2: offset_max.y,
-                                            stroke_width: self.stroke_width,
-                                            stroke_color: self.stroke_color,
-                                        }));
-                                    }
-                                    self.drag_start = None;
+                                    self.rectangles.push(CanvasItem::StrokeRect(StrokeRect {
+                                        x1: offset_min.x,
+                                        y1: offset_min.y,
+                                        x2: offset_max.x,
+                                        y2: offset_max.y,
+                                        stroke_width: self.stroke_width,
+                                        stroke_color: self.stroke_color,
+                                    }));
+                                }
+                                DrawingTool::FilledRect => {
+                                    let min = egui::pos2(start.x.min(end.x), start.y.min(end.y));
+                                    let max = egui::pos2(start.x.max(end.x), start.y.max(end.y));
+                                    let offset_min = (min - image_rect.min) / scale;
+                                    let offset_max = (max - image_rect.min) / scale;
+                                    self.rectangles.push(CanvasItem::FilledRect(FilledRect {
+                                        x1: offset_min.x,
+                                        y1: offset_min.y,
+                                        x2: offset_max.x,
+                                        y2: offset_max.y,
+                                        filled_color: self.fill_color,
+                                    }));
+                                }
+                                DrawingTool::Arrow => {
+                                    let offset_start = (start - image_rect.min) / scale;
+                                    let offset_end = (end - image_rect.min) / scale;
+                                    self.rectangles.push(CanvasItem::Arrow(Arrow {
+                                        start_x: offset_start.x,
+                                        start_y: offset_start.y,
+                                        end_x: offset_end.x,
+                                        end_y: offset_end.y,
+                                        color: self.stroke_color,
+                                        width: self.stroke_width,
+                                    }));
                                 }
                             }
+                            self.drag_start = None;
+                            self.history.push(self.rectangles.clone());
                         }
                     }
                 }
+            }
+        }
+    }
 
-                // 既存の四角形を描画
-                for (index, item) in self.rectangles.iter_mut().enumerate() {
-                    match item {
-                        CanvasItem::StrokeRect(rect) => {
-                            let world_min = image_rect.min
-                                + (egui::Pos2 {
-                                    x: rect.x1,
-                                    y: rect.y1,
-                                } * scale)
-                                    .to_vec2();
-                            let world_max = image_rect.min
-                                + (egui::Pos2 {
-                                    x: rect.x2,
-                                    y: rect.y2,
-                                } * scale)
-                                    .to_vec2();
-                            let world_rect = egui::Rect::from_min_max(world_min, world_max);
+    fn render_existing_items(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
+        let mut new_selected = None;
+        let mut changed = false;
+        for (index, item) in self.rectangles.iter_mut().enumerate() {
+            let sel = match item {
+                CanvasItem::StrokeRect(rect) => rect.render(
+                    ui,
+                    index,
+                    image_rect,
+                    scale,
+                    self.selected_index,
+                    self.drawing_mode,
+                    &mut changed,
+                ),
+                CanvasItem::FilledRect(rect) => rect.render(
+                    ui,
+                    index,
+                    image_rect,
+                    scale,
+                    self.selected_index,
+                    self.drawing_mode,
+                    &mut changed,
+                ),
+                CanvasItem::Arrow(arrow) => arrow.render(
+                    ui,
+                    index,
+                    image_rect,
+                    scale,
+                    self.selected_index,
+                    self.drawing_mode,
+                    &mut changed,
+                ),
+            };
+            if let Some(s) = sel {
+                new_selected = Some(s);
+            }
+        }
+        if new_selected.is_some() {
+            self.selected_index = new_selected;
+        }
+        if changed {
+            self.history.push(self.rectangles.clone());
+        }
+    }
 
-                            if !self.drawing_mode {
-                                let response = ui.interact(
-                                    world_rect,
-                                    egui::Id::new(format!("rect_{}", index)),
-                                    egui::Sense::click_and_drag(),
-                                );
-                                if response.clicked() {
-                                    self.selected_index = Some(index);
-                                }
-                                if response.dragged() {
-                                    let delta = response.drag_delta();
-                                    let delta_scaled = delta / scale;
-                                    rect.x1 += delta_scaled.x;
-                                    rect.y1 += delta_scaled.y;
-                                    rect.x2 += delta_scaled.x;
-                                    rect.y2 += delta_scaled.y;
-                                }
-                            }
-
-                            let color = if self.selected_index == Some(index) {
-                                egui::Color32::YELLOW
-                            } else {
-                                rect.stroke_color
-                            };
-                            let stroke_width = rect.stroke_width * scale;
-                            ui.painter().rect_stroke(
-                                world_rect,
-                                0.0,
-                                egui::Stroke::new(stroke_width, color),
-                                egui::StrokeKind::Middle,
+    fn render_drag_preview(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
+        if let Some(start) = self.drag_start {
+            if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+                if image_rect.contains(pos) {
+                    match self.current_tool {
+                        DrawingTool::Arrow => {
+                            ui.painter().line_segment(
+                                [start, pos],
+                                egui::Stroke::new(self.stroke_width * scale, egui::Color32::BLUE),
+                            );
+                            let dir = (pos - start).normalized();
+                            let arrow_size = 10.0 * scale;
+                            let perp = egui::Vec2::new(-dir.y, dir.x);
+                            let left = pos - dir * arrow_size + perp * arrow_size * 0.5;
+                            let right = pos - dir * arrow_size - perp * arrow_size * 0.5;
+                            ui.painter().line_segment(
+                                [pos, left],
+                                egui::Stroke::new(self.stroke_width * scale, egui::Color32::BLUE),
+                            );
+                            ui.painter().line_segment(
+                                [pos, right],
+                                egui::Stroke::new(self.stroke_width * scale, egui::Color32::BLUE),
                             );
                         }
-                        CanvasItem::FilledRect(rect) => {
-                            let world_min = image_rect.min
-                                + (egui::Pos2 {
-                                    x: rect.x1,
-                                    y: rect.y1,
-                                } * scale)
-                                    .to_vec2();
-                            let world_max = image_rect.min
-                                + (egui::Pos2 {
-                                    x: rect.x2,
-                                    y: rect.y2,
-                                } * scale)
-                                    .to_vec2();
-                            let world_rect = egui::Rect::from_min_max(world_min, world_max);
-
-                            if !self.drawing_mode {
-                                let response = ui.interact(
-                                    world_rect,
-                                    egui::Id::new(format!("rect_{}", index)),
-                                    egui::Sense::click_and_drag(),
-                                );
-                                if response.clicked() {
-                                    self.selected_index = Some(index);
-                                }
-                                if response.dragged() {
-                                    let delta = response.drag_delta();
-                                    let delta_scaled = delta / scale;
-                                    rect.x1 += delta_scaled.x;
-                                    rect.y1 += delta_scaled.y;
-                                    rect.x2 += delta_scaled.x;
-                                    rect.y2 += delta_scaled.y;
-                                }
-                            }
-
-                            ui.painter().rect_filled(world_rect, 0.0, rect.filled_color);
-                        }
-                    }
-                }
-
-                // ドラッグ中の四角形を描画
-                if let Some(start) = self.drag_start {
-                    if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-                        if image_rect.contains(pos) {
+                        _ => {
                             let end = pos;
                             let min = egui::pos2(start.x.min(end.x), start.y.min(end.y));
                             let max = egui::pos2(start.x.max(end.x), start.y.max(end.y));
                             let world_rect = egui::Rect::from_min_max(min, max);
-                            if self.fill_enabled {
+                            if matches!(self.current_tool, DrawingTool::FilledRect) {
                                 ui.painter().rect_filled(world_rect, 0.0, self.fill_color);
                             }
                             let stroke_width = self.stroke_width * scale;
@@ -369,6 +453,6 @@ impl eframe::App for AnnotoApp {
                     }
                 }
             }
-        });
+        }
     }
 }
