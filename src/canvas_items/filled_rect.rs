@@ -15,9 +15,8 @@ impl FilledRect {
         index: usize,
         image_rect: egui::Rect,
         scale: f32,
-        selected_index: Option<usize>,
+        _selected_index: Option<usize>,
         drawing_mode: bool,
-        changed: &mut bool,
     ) -> Option<usize> {
         let world_min = image_rect.min
             + (egui::Pos2 {
@@ -50,7 +49,6 @@ impl FilledRect {
                 self.y1 += delta_scaled.y;
                 self.x2 += delta_scaled.x;
                 self.y2 += delta_scaled.y;
-                *changed = true;
             }
         }
 

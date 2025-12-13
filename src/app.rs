@@ -1,13 +1,11 @@
+use crate::canvas_items::*;
+use crate::drawing_tool::DrawingTool;
 use egui::{FontData, FontDefinitions, FontFamily};
 use js_sys;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
 use web_sys::{File, FileReader, HtmlInputElement};
-
-use crate::canvas_items::*;
-use crate::drawing_tool::DrawingTool;
-use crate::history::History;
 
 struct AppState {
     image_bytes: Option<Vec<u8>>,
@@ -29,7 +27,6 @@ pub struct AnnotoApp {
     stroke_color: egui::Color32,
     fill_enabled: bool,
     fill_color: egui::Color32,
-    history: History,
     current_tool: DrawingTool,
 }
 
@@ -47,7 +44,6 @@ impl Default for AnnotoApp {
             stroke_color: egui::Color32::RED,
             fill_enabled: false,
             fill_color: egui::Color32::from_rgba_premultiplied(255, 0, 0, 128),
-            history: History::new(),
             current_tool: DrawingTool::StrokeRect,
         }
     }
@@ -155,19 +151,6 @@ impl AnnotoApp {
                     }
                 });
                 ui.add_space(16.0);
-                if ui.button("Undo").clicked() {
-                    if let Some(state) = self.history.undo() {
-                        self.rectangles = state;
-                        self.selected_index = None;
-                    }
-                }
-                if ui.button("Redo").clicked() {
-                    if let Some(state) = self.history.redo() {
-                        self.rectangles = state;
-                        self.selected_index = None;
-                    }
-                }
-                ui.add_space(16.0);
                 ui.label("倍率:");
                 ui.add(
                     egui::DragValue::new(&mut self.zoom)
@@ -242,7 +225,6 @@ impl AnnotoApp {
                 if ui.button("削除").clicked() {
                     self.rectangles.remove(index);
                     self.selected_index = None;
-                    self.history.push(self.rectangles.clone());
                 }
                 match &mut self.rectangles[index] {
                     CanvasItem::StrokeRect(rect) => {
@@ -262,12 +244,6 @@ impl AnnotoApp {
                     CanvasItem::Arrow(arrow) => {
                         ui.label("線の色:");
                         ui.color_edit_button_srgba(&mut arrow.color);
-                        ui.label("線の太さ:");
-                        ui.add(
-                            egui::DragValue::new(&mut arrow.width)
-                                .range(1..=50)
-                                .suffix("px"),
-                        );
                     }
                 }
             }
@@ -352,12 +328,10 @@ impl AnnotoApp {
                                         end_x: offset_end.x,
                                         end_y: offset_end.y,
                                         color: self.stroke_color,
-                                        width: self.stroke_width,
                                     }));
                                 }
                             }
                             self.drag_start = None;
-                            self.history.push(self.rectangles.clone());
                         }
                     }
                 }
@@ -367,7 +341,6 @@ impl AnnotoApp {
 
     fn render_existing_items(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
         let mut new_selected = None;
-        let mut changed = false;
         for (index, item) in self.rectangles.iter_mut().enumerate() {
             let sel = match item {
                 CanvasItem::StrokeRect(rect) => rect.render(
@@ -377,7 +350,6 @@ impl AnnotoApp {
                     scale,
                     self.selected_index,
                     self.drawing_mode,
-                    &mut changed,
                 ),
                 CanvasItem::FilledRect(rect) => rect.render(
                     ui,
@@ -386,7 +358,6 @@ impl AnnotoApp {
                     scale,
                     self.selected_index,
                     self.drawing_mode,
-                    &mut changed,
                 ),
                 CanvasItem::Arrow(arrow) => arrow.render(
                     ui,
@@ -395,7 +366,6 @@ impl AnnotoApp {
                     scale,
                     self.selected_index,
                     self.drawing_mode,
-                    &mut changed,
                 ),
             };
             if let Some(s) = sel {
@@ -405,53 +375,74 @@ impl AnnotoApp {
         if new_selected.is_some() {
             self.selected_index = new_selected;
         }
-        if changed {
-            self.history.push(self.rectangles.clone());
-        }
     }
 
     fn render_drag_preview(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
-        if let Some(start) = self.drag_start {
-            if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-                if image_rect.contains(pos) {
-                    match self.current_tool {
-                        DrawingTool::Arrow => {
-                            ui.painter().line_segment(
-                                [start, pos],
-                                egui::Stroke::new(self.stroke_width * scale, egui::Color32::BLUE),
-                            );
-                            let dir = (pos - start).normalized();
-                            let arrow_size = 10.0 * scale;
-                            let perp = egui::Vec2::new(-dir.y, dir.x);
-                            let left = pos - dir * arrow_size + perp * arrow_size * 0.5;
-                            let right = pos - dir * arrow_size - perp * arrow_size * 0.5;
-                            ui.painter().line_segment(
-                                [pos, left],
-                                egui::Stroke::new(self.stroke_width * scale, egui::Color32::BLUE),
-                            );
-                            ui.painter().line_segment(
-                                [pos, right],
-                                egui::Stroke::new(self.stroke_width * scale, egui::Color32::BLUE),
-                            );
-                        }
-                        _ => {
-                            let end = pos;
-                            let min = egui::pos2(start.x.min(end.x), start.y.min(end.y));
-                            let max = egui::pos2(start.x.max(end.x), start.y.max(end.y));
-                            let world_rect = egui::Rect::from_min_max(min, max);
-                            if matches!(self.current_tool, DrawingTool::FilledRect) {
-                                ui.painter().rect_filled(world_rect, 0.0, self.fill_color);
-                            }
-                            let stroke_width = self.stroke_width * scale;
-                            ui.painter().rect_stroke(
-                                world_rect,
-                                0.0,
-                                egui::Stroke::new(stroke_width, egui::Color32::BLUE),
-                                egui::StrokeKind::Middle,
-                            );
-                        }
-                    }
-                }
+        let Some(start_world) = self.drag_start else {
+            return;
+        };
+        let Some(end_world) = ui.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+        if !image_rect.contains(end_world) {
+            return;
+        }
+
+        match self.current_tool {
+            DrawingTool::StrokeRect => {
+                let min_world = egui::pos2(
+                    start_world.x.min(end_world.x),
+                    start_world.y.min(end_world.y),
+                );
+                let max_world = egui::pos2(
+                    start_world.x.max(end_world.x),
+                    start_world.y.max(end_world.y),
+                );
+                let offset_min = (min_world - image_rect.min) / scale;
+                let offset_max = (max_world - image_rect.min) / scale;
+
+                let mut preview = StrokeRect {
+                    x1: offset_min.x,
+                    y1: offset_min.y,
+                    x2: offset_max.x,
+                    y2: offset_max.y,
+                    stroke_width: self.stroke_width,
+                    stroke_color: self.stroke_color,
+                };
+                let _ = preview.render(ui, 0, image_rect, scale, None, true);
+            }
+            DrawingTool::FilledRect => {
+                let min_world = egui::pos2(
+                    start_world.x.min(end_world.x),
+                    start_world.y.min(end_world.y),
+                );
+                let max_world = egui::pos2(
+                    start_world.x.max(end_world.x),
+                    start_world.y.max(end_world.y),
+                );
+                let offset_min = (min_world - image_rect.min) / scale;
+                let offset_max = (max_world - image_rect.min) / scale;
+
+                let mut preview = FilledRect {
+                    x1: offset_min.x,
+                    y1: offset_min.y,
+                    x2: offset_max.x,
+                    y2: offset_max.y,
+                    filled_color: self.fill_color,
+                };
+                let _ = preview.render(ui, 0, image_rect, scale, None, true);
+            }
+            DrawingTool::Arrow => {
+                let offset_start = (start_world - image_rect.min) / scale;
+                let offset_end = (end_world - image_rect.min) / scale;
+                let mut preview = Arrow {
+                    start_x: offset_start.x,
+                    start_y: offset_start.y,
+                    end_x: offset_end.x,
+                    end_y: offset_end.y,
+                    color: self.stroke_color,
+                };
+                let _ = preview.render(ui, 0, image_rect, scale, None, true);
             }
         }
     }

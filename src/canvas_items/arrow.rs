@@ -1,11 +1,16 @@
+use egui::{
+    Pos2,
+    epaint::{ColorMode, PathShape, PathStroke},
+};
+
 #[derive(Clone)]
 pub struct Arrow {
     pub start_x: f32,
     pub start_y: f32,
     pub end_x: f32,
     pub end_y: f32,
+
     pub color: egui::Color32,
-    pub width: f32,
 }
 
 impl Arrow {
@@ -17,7 +22,6 @@ impl Arrow {
         scale: f32,
         selected_index: Option<usize>,
         drawing_mode: bool,
-        changed: &mut bool,
     ) -> Option<usize> {
         let start = image_rect.min
             + (egui::Pos2 {
@@ -31,43 +35,48 @@ impl Arrow {
                 y: self.end_y,
             } * scale)
                 .to_vec2();
-        let color = if selected_index == Some(index) {
-            egui::Color32::YELLOW
-        } else {
-            self.color
+
+        let dx = end.x - start.x;
+        let dy = end.y - start.y;
+        let line_rad = (dy as f32).atan2(dx as f32);
+
+        let path_stroke = PathStroke {
+            width: 1.0,
+            color: ColorMode::Solid(self.color),
+            kind: egui::StrokeKind::Inside,
         };
-        ui.painter()
-            .line_segment([start, end], egui::Stroke::new(self.width * scale, color));
-        // 矢印の頭
-        let dir = (end - start).normalized();
-        let arrow_size = 10.0 * scale;
-        let perp = egui::Vec2::new(-dir.y, dir.x);
-        let left = end - dir * arrow_size + perp * arrow_size * 0.5;
-        let right = end - dir * arrow_size - perp * arrow_size * 0.5;
-        ui.painter()
-            .line_segment([end, left], egui::Stroke::new(self.width * scale, color));
-        ui.painter()
-            .line_segment([end, right], egui::Stroke::new(self.width * scale, color));
-        let rect = egui::Rect::from_min_max(start.min(end), end).expand(5.0);
-        let mut new_selected = None;
-        if !drawing_mode {
-            let response = ui.interact(
-                rect,
-                egui::Id::new(format!("arrow_{}", index)),
-                egui::Sense::click_and_drag(),
-            );
-            if response.clicked() {
-                new_selected = Some(index);
-            }
-            if response.dragged() {
-                let delta = response.drag_delta() / scale;
-                self.start_x += delta.x;
-                self.start_y += delta.y;
-                self.end_x += delta.x;
-                self.end_y += delta.y;
-                *changed = true;
-            }
+        let mut points = vec![];
+        points.push(Pos2 {
+            x: start.x,
+            y: start.y,
+        });
+        points.push(Self::calc_point(&end, line_rad, 20.0, 45.0));
+        points.push(Self::calc_point(&end, line_rad, 40.0, 55.0));
+        points.push(Pos2 { x: end.x, y: end.y });
+        points.push(Self::calc_point(&end, line_rad, -40.0, 55.0));
+        points.push(Self::calc_point(&end, line_rad, -20.0, 45.0));
+        let path = PathShape {
+            points: points,
+            closed: true,
+            fill: self.color,
+            stroke: path_stroke,
+        };
+        ui.painter().add(path);
+
+        None
+    }
+
+    fn calc_point(p: &Pos2, line_rad: f32, angle_deg: f32, base: f32) -> Pos2 {
+        let angle_rad = angle_deg.to_radians();
+        let local_x = -base;
+        let local_y = base * angle_rad.tan();
+
+        let cos = line_rad.cos();
+        let sin = line_rad.sin();
+
+        Pos2 {
+            x: p.x + local_x * cos - local_y * sin,
+            y: p.y + local_x * sin + local_y * cos,
         }
-        new_selected
     }
 }
