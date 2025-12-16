@@ -28,6 +28,13 @@ pub struct AnnotoApp {
     fill_enabled: bool,
     fill_color: egui::Color32,
     current_tool: DrawingTool,
+
+    // Text input related
+    text_input_mode: bool,
+    text_position: Option<egui::Pos2>,
+    text_content: String,
+    text_font_size: f32,
+    text_color: egui::Color32,
 }
 
 impl Default for AnnotoApp {
@@ -45,6 +52,11 @@ impl Default for AnnotoApp {
             fill_enabled: false,
             fill_color: egui::Color32::from_rgba_premultiplied(255, 0, 0, 128),
             current_tool: DrawingTool::StrokeRect,
+            text_input_mode: false,
+            text_position: None,
+            text_content: String::new(),
+            text_font_size: 20.0,
+            text_color: egui::Color32::BLACK,
         }
     }
 }
@@ -204,6 +216,18 @@ impl AnnotoApp {
             {
                 self.current_tool = DrawingTool::Arrow;
             }
+            if ui
+                .selectable_label(matches!(self.current_tool, DrawingTool::Line), "直線")
+                .clicked()
+            {
+                self.current_tool = DrawingTool::Line;
+            }
+            if ui
+                .selectable_label(matches!(self.current_tool, DrawingTool::Text), "テキスト")
+                .clicked()
+            {
+                self.current_tool = DrawingTool::Text;
+            }
             ui.add_space(16.0);
             ui.label("線の太さ:");
             ui.add(
@@ -245,6 +269,28 @@ impl AnnotoApp {
                         ui.label("線の色:");
                         ui.color_edit_button_srgba(&mut arrow.color);
                     }
+                    CanvasItem::Line(line) => {
+                        ui.label("線の色:");
+                        ui.color_edit_button_srgba(&mut line.stroke_color);
+                        ui.label("線の太さ:");
+                        ui.add(
+                            egui::DragValue::new(&mut line.stroke_width)
+                                .range(1..=50)
+                                .suffix("px"),
+                        );
+                    }
+                    CanvasItem::Text(text) => {
+                        ui.label("テキスト色:");
+                        ui.color_edit_button_srgba(&mut text.color);
+                        ui.label("フォントサイズ:");
+                        ui.add(
+                            egui::DragValue::new(&mut text.font_size)
+                                .range(10.0..=100.0)
+                                .suffix("px"),
+                        );
+                        ui.label("テキスト:");
+                        ui.text_edit_singleline(&mut text.content);
+                    }
                 }
             }
         });
@@ -270,6 +316,7 @@ impl AnnotoApp {
                 self.handle_drawing_mode(ui, &image_response, image_rect, scale);
                 self.render_existing_items(ui, image_rect, scale);
                 self.render_drag_preview(ui, image_rect, scale);
+                self.handle_text_input(ui, image_rect, scale);
             }
         });
     }
@@ -285,53 +332,85 @@ impl AnnotoApp {
             let pointer_pos = ui.input(|i| i.pointer.hover_pos());
             if let Some(pos) = pointer_pos {
                 if image_rect.contains(pos) {
-                    if image_response.drag_started() {
-                        self.drag_start = Some(pos);
-                    }
-                    if image_response.drag_stopped() {
-                        if let Some(start) = self.drag_start {
-                            let end = pos;
-                            match self.current_tool {
-                                DrawingTool::StrokeRect => {
-                                    let min = egui::pos2(start.x.min(end.x), start.y.min(end.y));
-                                    let max = egui::pos2(start.x.max(end.x), start.y.max(end.y));
-                                    let offset_min = (min - image_rect.min) / scale;
-                                    let offset_max = (max - image_rect.min) / scale;
-                                    self.rectangles.push(CanvasItem::StrokeRect(StrokeRect {
-                                        x1: offset_min.x,
-                                        y1: offset_min.y,
-                                        x2: offset_max.x,
-                                        y2: offset_max.y,
-                                        stroke_width: self.stroke_width,
-                                        stroke_color: self.stroke_color,
-                                    }));
-                                }
-                                DrawingTool::FilledRect => {
-                                    let min = egui::pos2(start.x.min(end.x), start.y.min(end.y));
-                                    let max = egui::pos2(start.x.max(end.x), start.y.max(end.y));
-                                    let offset_min = (min - image_rect.min) / scale;
-                                    let offset_max = (max - image_rect.min) / scale;
-                                    self.rectangles.push(CanvasItem::FilledRect(FilledRect {
-                                        x1: offset_min.x,
-                                        y1: offset_min.y,
-                                        x2: offset_max.x,
-                                        y2: offset_max.y,
-                                        filled_color: self.fill_color,
-                                    }));
-                                }
-                                DrawingTool::Arrow => {
-                                    let offset_start = (start - image_rect.min) / scale;
-                                    let offset_end = (end - image_rect.min) / scale;
-                                    self.rectangles.push(CanvasItem::Arrow(Arrow {
-                                        start_x: offset_start.x,
-                                        start_y: offset_start.y,
-                                        end_x: offset_end.x,
-                                        end_y: offset_end.y,
-                                        color: self.stroke_color,
-                                    }));
+                    match self.current_tool {
+                        DrawingTool::Text => {
+                            if image_response.clicked() {
+                                self.text_position = Some(pos);
+                                self.text_input_mode = true;
+                                self.text_content.clear();
+                            }
+                        }
+                        _ => {
+                            if image_response.drag_started() {
+                                self.drag_start = Some(pos);
+                            }
+                            if image_response.drag_stopped() {
+                                if let Some(start) = self.drag_start {
+                                    let end = pos;
+                                    match self.current_tool {
+                                        DrawingTool::StrokeRect => {
+                                            let min =
+                                                egui::pos2(start.x.min(end.x), start.y.min(end.y));
+                                            let max =
+                                                egui::pos2(start.x.max(end.x), start.y.max(end.y));
+                                            let offset_min = (min - image_rect.min) / scale;
+                                            let offset_max = (max - image_rect.min) / scale;
+                                            self.rectangles.push(CanvasItem::StrokeRect(
+                                                StrokeRect {
+                                                    x1: offset_min.x,
+                                                    y1: offset_min.y,
+                                                    x2: offset_max.x,
+                                                    y2: offset_max.y,
+                                                    stroke_width: self.stroke_width,
+                                                    stroke_color: self.stroke_color,
+                                                },
+                                            ));
+                                        }
+                                        DrawingTool::FilledRect => {
+                                            let min =
+                                                egui::pos2(start.x.min(end.x), start.y.min(end.y));
+                                            let max =
+                                                egui::pos2(start.x.max(end.x), start.y.max(end.y));
+                                            let offset_min = (min - image_rect.min) / scale;
+                                            let offset_max = (max - image_rect.min) / scale;
+                                            self.rectangles.push(CanvasItem::FilledRect(
+                                                FilledRect {
+                                                    x1: offset_min.x,
+                                                    y1: offset_min.y,
+                                                    x2: offset_max.x,
+                                                    y2: offset_max.y,
+                                                    filled_color: self.fill_color,
+                                                },
+                                            ));
+                                        }
+                                        DrawingTool::Arrow => {
+                                            let offset_start = (start - image_rect.min) / scale;
+                                            let offset_end = (end - image_rect.min) / scale;
+                                            self.rectangles.push(CanvasItem::Arrow(Arrow {
+                                                start_x: offset_start.x,
+                                                start_y: offset_start.y,
+                                                end_x: offset_end.x,
+                                                end_y: offset_end.y,
+                                                color: self.stroke_color,
+                                            }));
+                                        }
+                                        DrawingTool::Line => {
+                                            let offset_start = (start - image_rect.min) / scale;
+                                            let offset_end = (end - image_rect.min) / scale;
+                                            self.rectangles.push(CanvasItem::Line(Line {
+                                                start_x: offset_start.x,
+                                                start_y: offset_start.y,
+                                                end_x: offset_end.x,
+                                                end_y: offset_end.y,
+                                                stroke_width: self.stroke_width,
+                                                stroke_color: self.stroke_color,
+                                            }));
+                                        }
+                                        DrawingTool::Text => {} // Already handled above
+                                    }
+                                    self.drag_start = None;
                                 }
                             }
-                            self.drag_start = None;
                         }
                     }
                 }
@@ -360,6 +439,22 @@ impl AnnotoApp {
                     self.drawing_mode,
                 ),
                 CanvasItem::Arrow(arrow) => arrow.render(
+                    ui,
+                    index,
+                    image_rect,
+                    scale,
+                    self.selected_index,
+                    self.drawing_mode,
+                ),
+                CanvasItem::Line(line) => line.render(
+                    ui,
+                    index,
+                    image_rect,
+                    scale,
+                    self.selected_index,
+                    self.drawing_mode,
+                ),
+                CanvasItem::Text(text) => text.render(
                     ui,
                     index,
                     image_rect,
@@ -443,6 +538,74 @@ impl AnnotoApp {
                     color: self.stroke_color,
                 };
                 let _ = preview.render(ui, 0, image_rect, scale, None, true);
+            }
+            DrawingTool::Line => {
+                let offset_start = (start_world - image_rect.min) / scale;
+                let offset_end = (end_world - image_rect.min) / scale;
+                let mut preview = Line {
+                    start_x: offset_start.x,
+                    start_y: offset_start.y,
+                    end_x: offset_end.x,
+                    end_y: offset_end.y,
+                    stroke_width: self.stroke_width,
+                    stroke_color: self.stroke_color,
+                };
+                let _ = preview.render(ui, 0, image_rect, scale, None, true);
+            }
+            DrawingTool::Text => {} // No preview for text
+        }
+    }
+
+    fn handle_text_input(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
+        if self.text_input_mode {
+            if let Some(pos) = self.text_position {
+                // Show a window for text input
+                let mut open = true;
+                egui::Window::new("テキスト入力")
+                    .open(&mut open)
+                    .show(ui.ctx(), |ui| {
+                        ui.label("テキストを入力してください:");
+                        let response = ui.add(
+                            egui::TextEdit::multiline(&mut self.text_content)
+                                .font(egui::FontId::new(16.0, egui::FontFamily::Proportional))
+                                .desired_width(300.0)
+                                .desired_rows(3),
+                        );
+                        response.request_focus();
+
+                        ui.horizontal(|ui| {
+                            if ui.button("確定").clicked()
+                                || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                if !self.text_content.is_empty() {
+                                    let offset_pos = (pos - image_rect.min) / scale;
+                                    self.rectangles.push(CanvasItem::Text(Text {
+                                        x: offset_pos.x,
+                                        y: offset_pos.y,
+                                        content: self.text_content.clone(),
+                                        font_size: self.text_font_size,
+                                        color: self.text_color,
+                                    }));
+                                }
+                                self.text_input_mode = false;
+                                self.text_position = None;
+                                self.text_content.clear();
+                            }
+                            if ui.button("キャンセル").clicked()
+                                || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                            {
+                                self.text_input_mode = false;
+                                self.text_position = None;
+                                self.text_content.clear();
+                            }
+                        });
+                    });
+
+                if !open {
+                    self.text_input_mode = false;
+                    self.text_position = None;
+                    self.text_content.clear();
+                }
             }
         }
     }
