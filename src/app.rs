@@ -35,6 +35,9 @@ pub struct AnnotoApp {
     text_content: String,
     text_font_size: f32,
     text_color: egui::Color32,
+
+    // Cursor position
+    cursor_pos: Option<egui::Pos2>,
 }
 
 impl Default for AnnotoApp {
@@ -57,6 +60,7 @@ impl Default for AnnotoApp {
             text_content: String::new(),
             text_font_size: 20.0,
             text_color: egui::Color32::BLACK,
+            cursor_pos: None,
         }
     }
 }
@@ -169,6 +173,11 @@ impl AnnotoApp {
                         .range(1.0..=500.0)
                         .suffix("%"),
                 );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(pos) = self.cursor_pos {
+                        ui.label(format!("X: {:.0}, Y: {:.0}", pos.x, pos.y));
+                    }
+                });
             });
         });
     }
@@ -298,25 +307,44 @@ impl AnnotoApp {
 
     fn render_central_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(texture) = &self.image_texture {
+            if let Some(texture) = &self.image_texture.clone() {
                 let scale = self.zoom / 100.0;
-                let scaled_size = texture.size_vec2() * scale;
-                let image_response =
-                    ui.allocate_response(scaled_size, egui::Sense::click_and_drag());
-                let image_rect = image_response.rect;
 
-                // 画像を描画
-                ui.painter().image(
-                    texture.id(),
-                    image_rect,
-                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(1.0)),
-                    egui::Color32::WHITE,
-                );
+                egui::ScrollArea::both()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        // Update cursor position
+                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
 
-                self.handle_drawing_mode(ui, &image_response, image_rect, scale);
-                self.render_existing_items(ui, image_rect, scale);
-                self.render_drag_preview(ui, image_rect, scale);
-                self.handle_text_input(ui, image_rect, scale);
+                        let scaled_size = texture.size_vec2() * scale;
+                        let image_response =
+                            ui.allocate_response(scaled_size, egui::Sense::click_and_drag());
+                        let image_rect = image_response.rect;
+
+                        // 画像を描画
+                        ui.painter().image(
+                            texture.id(),
+                            image_rect,
+                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(1.0)),
+                            egui::Color32::WHITE,
+                        );
+
+                        // Adjust cursor position if over image
+                        if let Some(pos) = pointer_pos {
+                            if image_rect.contains(pos) {
+                                let cursor_in_image = (pos - image_rect.min) / scale;
+                                self.cursor_pos =
+                                    Some(egui::Pos2::new(cursor_in_image.x, cursor_in_image.y));
+                            }
+                        } else {
+                            self.cursor_pos = None;
+                        }
+
+                        self.handle_drawing_mode(ui, &image_response, image_rect, scale);
+                        self.render_existing_items(ui, image_rect, scale);
+                        self.render_drag_preview(ui, image_rect, scale);
+                        self.handle_text_input(ui, image_rect, scale);
+                    });
             }
         });
     }
