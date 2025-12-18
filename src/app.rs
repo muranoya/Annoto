@@ -19,15 +19,24 @@ pub struct AnnotoApp {
     image_bytes: Option<Vec<u8>>,
 
     zoom: f32,
-    drawing_mode: bool,
     rectangles: Vec<CanvasItem>,
     drag_start: Option<egui::Pos2>,
-    selected_index: Option<usize>,
     stroke_width: f32,
     stroke_color: egui::Color32,
     fill_enabled: bool,
     fill_color: egui::Color32,
+    rounding: u8,
     current_tool: DrawingTool,
+
+    // Text input related
+    text_input_mode: bool,
+    text_position: Option<egui::Pos2>,
+    text_content: String,
+    text_font_size: f32,
+    text_color: egui::Color32,
+
+    // Cursor position
+    cursor_pos: Option<egui::Pos2>,
 }
 
 impl Default for AnnotoApp {
@@ -36,15 +45,20 @@ impl Default for AnnotoApp {
             image_texture: None,
             image_bytes: None,
             zoom: 100.0,
-            drawing_mode: false,
             rectangles: Vec::new(),
             drag_start: None,
-            selected_index: None,
             stroke_width: 3.0,
             stroke_color: egui::Color32::RED,
             fill_enabled: false,
             fill_color: egui::Color32::from_rgba_premultiplied(255, 0, 0, 128),
+            rounding: 0,
             current_tool: DrawingTool::StrokeRect,
+            text_input_mode: false,
+            text_position: None,
+            text_content: String::new(),
+            text_font_size: 20.0,
+            text_color: egui::Color32::BLACK,
+            cursor_pos: None,
         }
     }
 }
@@ -157,28 +171,17 @@ impl AnnotoApp {
                         .range(1.0..=500.0)
                         .suffix("%"),
                 );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(pos) = self.cursor_pos {
+                        ui.label(format!("X: {:.0}, Y: {:.0}", pos.x, pos.y));
+                    }
+                });
             });
         });
     }
 
     fn render_side_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
-            ui.label(if self.drawing_mode {
-                "描画モード"
-            } else {
-                "選択モード"
-            });
-            if ui
-                .button(if self.drawing_mode {
-                    "選択モードに切替"
-                } else {
-                    "描画モードに切替"
-                })
-                .clicked()
-            {
-                self.drawing_mode = !self.drawing_mode;
-            }
-            ui.add_space(16.0);
             ui.label("描画ツール");
             if ui
                 .selectable_label(
@@ -204,6 +207,18 @@ impl AnnotoApp {
             {
                 self.current_tool = DrawingTool::Arrow;
             }
+            if ui
+                .selectable_label(matches!(self.current_tool, DrawingTool::Line), "直線")
+                .clicked()
+            {
+                self.current_tool = DrawingTool::Line;
+            }
+            if ui
+                .selectable_label(matches!(self.current_tool, DrawingTool::Text), "テキスト")
+                .clicked()
+            {
+                self.current_tool = DrawingTool::Text;
+            }
             ui.add_space(16.0);
             ui.label("線の太さ:");
             ui.add(
@@ -219,57 +234,58 @@ impl AnnotoApp {
                 ui.label("塗りつぶし色:");
                 ui.color_edit_button_srgba(&mut self.fill_color);
             }
-            ui.add_space(16.0);
-            if let Some(index) = self.selected_index {
-                ui.label("選択アイテム編集");
-                if ui.button("削除").clicked() {
-                    self.rectangles.remove(index);
-                    self.selected_index = None;
-                }
-                match &mut self.rectangles[index] {
-                    CanvasItem::StrokeRect(rect) => {
-                        ui.label("線の色:");
-                        ui.color_edit_button_srgba(&mut rect.stroke_color);
-                        ui.label("線の太さ:");
-                        ui.add(
-                            egui::DragValue::new(&mut rect.stroke_width)
-                                .range(1..=50)
-                                .suffix("px"),
-                        );
-                    }
-                    CanvasItem::FilledRect(rect) => {
-                        ui.label("塗りつぶし色:");
-                        ui.color_edit_button_srgba(&mut rect.filled_color);
-                    }
-                    CanvasItem::Arrow(arrow) => {
-                        ui.label("線の色:");
-                        ui.color_edit_button_srgba(&mut arrow.color);
-                    }
-                }
+            if matches!(self.current_tool, DrawingTool::StrokeRect | DrawingTool::FilledRect) {
+                ui.add_space(16.0);
+                ui.label("角の丸め:");
+                ui.add(
+                    egui::DragValue::new(&mut self.rounding)
+                        .range(0..=255)
+                        .suffix("px"),
+                );
             }
         });
     }
 
     fn render_central_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(texture) = &self.image_texture {
+            if let Some(texture) = &self.image_texture.clone() {
                 let scale = self.zoom / 100.0;
-                let scaled_size = texture.size_vec2() * scale;
-                let image_response =
-                    ui.allocate_response(scaled_size, egui::Sense::click_and_drag());
-                let image_rect = image_response.rect;
 
-                // 画像を描画
-                ui.painter().image(
-                    texture.id(),
-                    image_rect,
-                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(1.0)),
-                    egui::Color32::WHITE,
-                );
+                egui::ScrollArea::both()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        // Update cursor position
+                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
 
-                self.handle_drawing_mode(ui, &image_response, image_rect, scale);
-                self.render_existing_items(ui, image_rect, scale);
-                self.render_drag_preview(ui, image_rect, scale);
+                        let scaled_size = texture.size_vec2() * scale;
+                        let image_response =
+                            ui.allocate_response(scaled_size, egui::Sense::click_and_drag());
+                        let image_rect = image_response.rect;
+
+                        // 画像を描画
+                        ui.painter().image(
+                            texture.id(),
+                            image_rect,
+                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(1.0)),
+                            egui::Color32::WHITE,
+                        );
+
+                        // Adjust cursor position if over image
+                        if let Some(pos) = pointer_pos {
+                            if image_rect.contains(pos) {
+                                let cursor_in_image = (pos - image_rect.min) / scale;
+                                self.cursor_pos =
+                                    Some(egui::Pos2::new(cursor_in_image.x, cursor_in_image.y));
+                            }
+                        } else {
+                            self.cursor_pos = None;
+                        }
+
+                        self.handle_drawing_mode(ui, &image_response, image_rect, scale);
+                        self.render_existing_items(ui, image_rect, scale);
+                        self.render_drag_preview(ui, image_rect, scale);
+                        self.handle_text_input(ui, image_rect, scale);
+                    });
             }
         });
     }
@@ -281,57 +297,85 @@ impl AnnotoApp {
         image_rect: egui::Rect,
         scale: f32,
     ) {
-        if self.drawing_mode {
-            let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-            if let Some(pos) = pointer_pos {
-                if image_rect.contains(pos) {
-                    if image_response.drag_started() {
-                        self.drag_start = Some(pos);
+        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+        if let Some(pos) = pointer_pos {
+            if image_rect.contains(pos) {
+                match self.current_tool {
+                    DrawingTool::Text => {
+                        if image_response.clicked() {
+                            self.text_position = Some(pos);
+                            self.text_input_mode = true;
+                            self.text_content.clear();
+                        }
                     }
-                    if image_response.drag_stopped() {
-                        if let Some(start) = self.drag_start {
-                            let end = pos;
-                            match self.current_tool {
-                                DrawingTool::StrokeRect => {
-                                    let min = egui::pos2(start.x.min(end.x), start.y.min(end.y));
-                                    let max = egui::pos2(start.x.max(end.x), start.y.max(end.y));
-                                    let offset_min = (min - image_rect.min) / scale;
-                                    let offset_max = (max - image_rect.min) / scale;
-                                    self.rectangles.push(CanvasItem::StrokeRect(StrokeRect {
-                                        x1: offset_min.x,
-                                        y1: offset_min.y,
-                                        x2: offset_max.x,
-                                        y2: offset_max.y,
-                                        stroke_width: self.stroke_width,
-                                        stroke_color: self.stroke_color,
-                                    }));
+                    _ => {
+                        if image_response.drag_started() {
+                            self.drag_start = Some(pos);
+                        }
+                        if image_response.drag_stopped() {
+                            if let Some(start) = self.drag_start {
+                                let end = pos;
+                                match self.current_tool {
+                                    DrawingTool::StrokeRect => {
+                                        let min =
+                                            egui::pos2(start.x.min(end.x), start.y.min(end.y));
+                                        let max =
+                                            egui::pos2(start.x.max(end.x), start.y.max(end.y));
+                                        let offset_min = (min - image_rect.min) / scale;
+                                        let offset_max = (max - image_rect.min) / scale;
+                                        self.rectangles.push(CanvasItem::StrokeRect(StrokeRect {
+                                            x1: offset_min.x,
+                                            y1: offset_min.y,
+                                            x2: offset_max.x,
+                                            y2: offset_max.y,
+                                            stroke_width: self.stroke_width,
+                                            stroke_color: self.stroke_color,
+                                            rounding: self.rounding,
+                                        }));
+                                    }
+                                    DrawingTool::FilledRect => {
+                                        let min =
+                                            egui::pos2(start.x.min(end.x), start.y.min(end.y));
+                                        let max =
+                                            egui::pos2(start.x.max(end.x), start.y.max(end.y));
+                                        let offset_min = (min - image_rect.min) / scale;
+                                        let offset_max = (max - image_rect.min) / scale;
+                                        self.rectangles.push(CanvasItem::FilledRect(FilledRect {
+                                            x1: offset_min.x,
+                                            y1: offset_min.y,
+                                            x2: offset_max.x,
+                                            y2: offset_max.y,
+                                            filled_color: self.fill_color,
+                                            rounding: self.rounding,
+                                        }));
+                                    }
+                                    DrawingTool::Arrow => {
+                                        let offset_start = (start - image_rect.min) / scale;
+                                        let offset_end = (end - image_rect.min) / scale;
+                                        self.rectangles.push(CanvasItem::Arrow(Arrow {
+                                            start_x: offset_start.x,
+                                            start_y: offset_start.y,
+                                            end_x: offset_end.x,
+                                            end_y: offset_end.y,
+                                            color: self.stroke_color,
+                                        }));
+                                    }
+                                    DrawingTool::Line => {
+                                        let offset_start = (start - image_rect.min) / scale;
+                                        let offset_end = (end - image_rect.min) / scale;
+                                        self.rectangles.push(CanvasItem::Line(Line {
+                                            start_x: offset_start.x,
+                                            start_y: offset_start.y,
+                                            end_x: offset_end.x,
+                                            end_y: offset_end.y,
+                                            stroke_width: self.stroke_width,
+                                            stroke_color: self.stroke_color,
+                                        }));
+                                    }
+                                    DrawingTool::Text => {} // Already handled above
                                 }
-                                DrawingTool::FilledRect => {
-                                    let min = egui::pos2(start.x.min(end.x), start.y.min(end.y));
-                                    let max = egui::pos2(start.x.max(end.x), start.y.max(end.y));
-                                    let offset_min = (min - image_rect.min) / scale;
-                                    let offset_max = (max - image_rect.min) / scale;
-                                    self.rectangles.push(CanvasItem::FilledRect(FilledRect {
-                                        x1: offset_min.x,
-                                        y1: offset_min.y,
-                                        x2: offset_max.x,
-                                        y2: offset_max.y,
-                                        filled_color: self.fill_color,
-                                    }));
-                                }
-                                DrawingTool::Arrow => {
-                                    let offset_start = (start - image_rect.min) / scale;
-                                    let offset_end = (end - image_rect.min) / scale;
-                                    self.rectangles.push(CanvasItem::Arrow(Arrow {
-                                        start_x: offset_start.x,
-                                        start_y: offset_start.y,
-                                        end_x: offset_end.x,
-                                        end_y: offset_end.y,
-                                        color: self.stroke_color,
-                                    }));
-                                }
+                                self.drag_start = None;
                             }
-                            self.drag_start = None;
                         }
                     }
                 }
@@ -340,40 +384,14 @@ impl AnnotoApp {
     }
 
     fn render_existing_items(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
-        let mut new_selected = None;
-        for (index, item) in self.rectangles.iter_mut().enumerate() {
-            let sel = match item {
-                CanvasItem::StrokeRect(rect) => rect.render(
-                    ui,
-                    index,
-                    image_rect,
-                    scale,
-                    self.selected_index,
-                    self.drawing_mode,
-                ),
-                CanvasItem::FilledRect(rect) => rect.render(
-                    ui,
-                    index,
-                    image_rect,
-                    scale,
-                    self.selected_index,
-                    self.drawing_mode,
-                ),
-                CanvasItem::Arrow(arrow) => arrow.render(
-                    ui,
-                    index,
-                    image_rect,
-                    scale,
-                    self.selected_index,
-                    self.drawing_mode,
-                ),
+        for item in self.rectangles.iter_mut() {
+            match item {
+                CanvasItem::StrokeRect(rect) => rect.render(ui, image_rect, scale),
+                CanvasItem::FilledRect(rect) => rect.render(ui, image_rect, scale),
+                CanvasItem::Arrow(arrow) => arrow.render(ui, image_rect, scale),
+                CanvasItem::Line(line) => line.render(ui, image_rect, scale),
+                CanvasItem::Text(text) => text.render(ui, image_rect, scale),
             };
-            if let Some(s) = sel {
-                new_selected = Some(s);
-            }
-        }
-        if new_selected.is_some() {
-            self.selected_index = new_selected;
         }
     }
 
@@ -401,15 +419,16 @@ impl AnnotoApp {
                 let offset_min = (min_world - image_rect.min) / scale;
                 let offset_max = (max_world - image_rect.min) / scale;
 
-                let mut preview = StrokeRect {
+                let preview = StrokeRect {
                     x1: offset_min.x,
                     y1: offset_min.y,
                     x2: offset_max.x,
                     y2: offset_max.y,
                     stroke_width: self.stroke_width,
                     stroke_color: self.stroke_color,
+                    rounding: self.rounding,
                 };
-                let _ = preview.render(ui, 0, image_rect, scale, None, true);
+                preview.render(ui, image_rect, scale);
             }
             DrawingTool::FilledRect => {
                 let min_world = egui::pos2(
@@ -423,26 +442,95 @@ impl AnnotoApp {
                 let offset_min = (min_world - image_rect.min) / scale;
                 let offset_max = (max_world - image_rect.min) / scale;
 
-                let mut preview = FilledRect {
+                let preview = FilledRect {
                     x1: offset_min.x,
                     y1: offset_min.y,
                     x2: offset_max.x,
                     y2: offset_max.y,
                     filled_color: self.fill_color,
+                    rounding: self.rounding,
                 };
-                let _ = preview.render(ui, 0, image_rect, scale, None, true);
+                preview.render(ui, image_rect, scale);
             }
             DrawingTool::Arrow => {
                 let offset_start = (start_world - image_rect.min) / scale;
                 let offset_end = (end_world - image_rect.min) / scale;
-                let mut preview = Arrow {
+                let preview = Arrow {
                     start_x: offset_start.x,
                     start_y: offset_start.y,
                     end_x: offset_end.x,
                     end_y: offset_end.y,
                     color: self.stroke_color,
                 };
-                let _ = preview.render(ui, 0, image_rect, scale, None, true);
+                preview.render(ui, image_rect, scale);
+            }
+            DrawingTool::Line => {
+                let offset_start = (start_world - image_rect.min) / scale;
+                let offset_end = (end_world - image_rect.min) / scale;
+                let preview = Line {
+                    start_x: offset_start.x,
+                    start_y: offset_start.y,
+                    end_x: offset_end.x,
+                    end_y: offset_end.y,
+                    stroke_width: self.stroke_width,
+                    stroke_color: self.stroke_color,
+                };
+                preview.render(ui, image_rect, scale);
+            }
+            DrawingTool::Text => {} // No preview for text
+        }
+    }
+
+    fn handle_text_input(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
+        if self.text_input_mode {
+            if let Some(pos) = self.text_position {
+                // Show a window for text input
+                let mut open = true;
+                egui::Window::new("テキスト入力")
+                    .open(&mut open)
+                    .show(ui.ctx(), |ui| {
+                        ui.label("テキストを入力してください:");
+                        let response = ui.add(
+                            egui::TextEdit::multiline(&mut self.text_content)
+                                .font(egui::FontId::new(16.0, egui::FontFamily::Proportional))
+                                .desired_width(300.0)
+                                .desired_rows(3),
+                        );
+                        response.request_focus();
+
+                        ui.horizontal(|ui| {
+                            if ui.button("確定").clicked()
+                                || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                if !self.text_content.is_empty() {
+                                    let offset_pos = (pos - image_rect.min) / scale;
+                                    self.rectangles.push(CanvasItem::Text(Text {
+                                        x: offset_pos.x,
+                                        y: offset_pos.y,
+                                        content: self.text_content.clone(),
+                                        font_size: self.text_font_size,
+                                        color: self.text_color,
+                                    }));
+                                }
+                                self.text_input_mode = false;
+                                self.text_position = None;
+                                self.text_content.clear();
+                            }
+                            if ui.button("キャンセル").clicked()
+                                || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                            {
+                                self.text_input_mode = false;
+                                self.text_position = None;
+                                self.text_content.clear();
+                            }
+                        });
+                    });
+
+                if !open {
+                    self.text_input_mode = false;
+                    self.text_position = None;
+                    self.text_content.clear();
+                }
             }
         }
     }

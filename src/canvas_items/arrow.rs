@@ -14,15 +14,7 @@ pub struct Arrow {
 }
 
 impl Arrow {
-    pub fn render(
-        &mut self,
-        ui: &mut egui::Ui,
-        index: usize,
-        image_rect: egui::Rect,
-        scale: f32,
-        selected_index: Option<usize>,
-        drawing_mode: bool,
-    ) -> Option<usize> {
+    pub fn render(&self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
         let start = image_rect.min
             + (egui::Pos2 {
                 x: self.start_x,
@@ -62,8 +54,6 @@ impl Arrow {
             stroke: path_stroke,
         };
         ui.painter().add(path);
-
-        None
     }
 
     fn calc_point(p: &Pos2, line_rad: f32, angle_deg: f32, base: f32) -> Pos2 {

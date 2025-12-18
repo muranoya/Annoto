@@ -3,4 +3,6 @@ pub enum DrawingTool {
     StrokeRect,
     FilledRect,
     Arrow,
+    Line,
+    Text,
 }
