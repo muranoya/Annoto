@@ -6,6 +6,7 @@ pub struct FilledRect {
     pub y2: f32,
 
     pub filled_color: egui::Color32,
+    pub rounding: u8,
 }
 
 impl FilledRect {
@@ -24,6 +25,6 @@ impl FilledRect {
                 .to_vec2();
         let world_rect = egui::Rect::from_min_max(world_min, world_max);
 
-        ui.painter().rect_filled(world_rect, 0.0, self.filled_color);
+        ui.painter().rect_filled(world_rect, egui::CornerRadius::same(self.rounding), self.filled_color);
     }
 }

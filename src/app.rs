@@ -25,6 +25,7 @@ pub struct AnnotoApp {
     stroke_color: egui::Color32,
     fill_enabled: bool,
     fill_color: egui::Color32,
+    rounding: u8,
     current_tool: DrawingTool,
 
     // Text input related
@@ -50,6 +51,7 @@ impl Default for AnnotoApp {
             stroke_color: egui::Color32::RED,
             fill_enabled: false,
             fill_color: egui::Color32::from_rgba_premultiplied(255, 0, 0, 128),
+            rounding: 0,
             current_tool: DrawingTool::StrokeRect,
             text_input_mode: false,
             text_position: None,
@@ -232,6 +234,15 @@ impl AnnotoApp {
                 ui.label("塗りつぶし色:");
                 ui.color_edit_button_srgba(&mut self.fill_color);
             }
+            if matches!(self.current_tool, DrawingTool::StrokeRect | DrawingTool::FilledRect) {
+                ui.add_space(16.0);
+                ui.label("角の丸め:");
+                ui.add(
+                    egui::DragValue::new(&mut self.rounding)
+                        .range(0..=255)
+                        .suffix("px"),
+                );
+            }
         });
     }
 
@@ -319,6 +330,7 @@ impl AnnotoApp {
                                             y2: offset_max.y,
                                             stroke_width: self.stroke_width,
                                             stroke_color: self.stroke_color,
+                                            rounding: self.rounding,
                                         }));
                                     }
                                     DrawingTool::FilledRect => {
@@ -334,6 +346,7 @@ impl AnnotoApp {
                                             x2: offset_max.x,
                                             y2: offset_max.y,
                                             filled_color: self.fill_color,
+                                            rounding: self.rounding,
                                         }));
                                     }
                                     DrawingTool::Arrow => {
@@ -413,6 +426,7 @@ impl AnnotoApp {
                     y2: offset_max.y,
                     stroke_width: self.stroke_width,
                     stroke_color: self.stroke_color,
+                    rounding: self.rounding,
                 };
                 preview.render(ui, image_rect, scale);
             }
@@ -434,6 +448,7 @@ impl AnnotoApp {
                     x2: offset_max.x,
                     y2: offset_max.y,
                     filled_color: self.fill_color,
+                    rounding: self.rounding,
                 };
                 preview.render(ui, image_rect, scale);
             }

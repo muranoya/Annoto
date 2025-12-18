@@ -7,6 +7,7 @@ pub struct StrokeRect {
 
     pub stroke_width: f32,
     pub stroke_color: egui::Color32,
+    pub rounding: u8,
 }
 
 impl StrokeRect {
@@ -28,7 +29,7 @@ impl StrokeRect {
         let stroke_width = self.stroke_width * scale;
         ui.painter().rect_stroke(
             world_rect,
-            0.0,
+            egui::CornerRadius::same(self.rounding),
             egui::Stroke::new(stroke_width, self.stroke_color),
             egui::StrokeKind::Middle,
         );
