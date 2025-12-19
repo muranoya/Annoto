@@ -30,6 +30,10 @@ pub struct AnnotoApp {
     // Cursor position
     cursor_pos: Option<egui::Pos2>,
 
+    // Selection
+    selected_item: Option<usize>,
+    selected_handle: Option<crate::canvas_items::Handle>,
+
     // Export related
     show_export_dialog: bool,
     export_format: String,
@@ -49,6 +53,8 @@ impl Default for AnnotoApp {
             rounding: 0,
             current_tool: DrawingTool::StrokeRect,
             cursor_pos: None,
+            selected_item: None,
+            selected_handle: None,
             show_export_dialog: false,
             export_format: "PNG".to_string(),
         }
@@ -129,6 +135,7 @@ impl eframe::App for AnnotoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_image_loading(ctx);
         self.render_top_panel(ctx);
+        self.sync_ui_from_selection();
         self.render_side_panel(ctx);
         self.render_central_panel(ctx);
         self.show_export_dialog(ctx);
@@ -211,31 +218,70 @@ impl AnnotoApp {
                 self.current_tool = DrawingTool::Line;
             }
             ui.add_space(16.0);
-            ui.label("線の太さ:");
-            ui.add(
-                egui::DragValue::new(&mut self.stroke_width)
-                    .range(1..=50)
-                    .suffix("px"),
-            );
-            ui.add_space(16.0);
-            ui.label("線の色:");
-            ui.color_edit_button_srgba(&mut self.stroke_color);
-            if matches!(self.current_tool, DrawingTool::FilledRect) {
+
+            let tool_type = if let Some(idx) = self.selected_item {
+                if let Some(item) = self.rectangles.get(idx) {
+                    match item {
+                        CanvasItem::StrokeRect(_) => "StrokeRect",
+                        CanvasItem::FilledRect(_) => "FilledRect",
+                        CanvasItem::Arrow(_) => "Arrow",
+                        CanvasItem::Line(_) => "Line",
+                    }
+                } else {
+                    ""
+                }
+            } else {
+                match self.current_tool {
+                    DrawingTool::StrokeRect => "StrokeRect",
+                    DrawingTool::FilledRect => "FilledRect",
+                    DrawingTool::Arrow => "Arrow",
+                    DrawingTool::Line => "Line",
+                }
+            };
+
+            if matches!(tool_type, "StrokeRect" | "Line") {
+                ui.label("線の太さ:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.stroke_width)
+                            .range(1..=50)
+                            .suffix("px"),
+                    )
+                    .changed()
+                {
+                    self.update_selected_item();
+                }
+                ui.add_space(16.0);
+            }
+
+            if !tool_type.is_empty() {
+                ui.label("線の色:");
+                if ui.color_edit_button_srgba(&mut self.stroke_color).changed() {
+                    self.update_selected_item();
+                }
+            }
+
+            if matches!(tool_type, "FilledRect") {
                 ui.add_space(16.0);
                 ui.label("塗りつぶし色:");
-                ui.color_edit_button_srgba(&mut self.fill_color);
+                if ui.color_edit_button_srgba(&mut self.fill_color).changed() {
+                    self.update_selected_item();
+                }
             }
-            if matches!(
-                self.current_tool,
-                DrawingTool::StrokeRect | DrawingTool::FilledRect
-            ) {
+
+            if matches!(tool_type, "StrokeRect" | "FilledRect") {
                 ui.add_space(16.0);
                 ui.label("角の丸め:");
-                ui.add(
-                    egui::DragValue::new(&mut self.rounding)
-                        .range(0..=255)
-                        .suffix("px"),
-                );
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.rounding)
+                            .range(0..=255)
+                            .suffix("px"),
+                    )
+                    .changed()
+                {
+                    self.update_selected_item();
+                }
             }
         });
     }
@@ -278,6 +324,57 @@ impl AnnotoApp {
                         self.handle_drawing_mode(ui, &image_response, image_rect, scale);
                         self.render_existing_items(ui, image_rect, scale);
                         self.render_drag_preview(ui, image_rect, scale);
+                        self.render_handles(ui, image_rect, scale);
+
+                        // Set cursor and handle selection
+                        let mut hovering_index = None;
+                        if let Some(pos) = pointer_pos {
+                            if image_rect.contains(pos) {
+                                for (i, item) in self.rectangles.iter().enumerate() {
+                                    if item.hit_test(pos, image_rect, scale) {
+                                        hovering_index = Some(i);
+                                        break;
+                                    }
+                                }
+                                if hovering_index.is_some() {
+                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                                } else {
+                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Default);
+                                }
+                            }
+                        }
+
+                        // Handle click for selection
+                        if image_response.clicked() {
+                            if let Some(idx) = hovering_index {
+                                self.selected_item = Some(idx);
+                                self.selected_handle = None;
+                            } else {
+                                self.selected_item = None;
+                                self.selected_handle = None;
+                            }
+                        }
+
+                        // Handle drag start for selection (in case drag starts without click)
+                        if image_response.drag_started() {
+                            if let Some(idx) = hovering_index {
+                                self.selected_item = Some(idx);
+                                self.selected_handle = None;
+                            } else {
+                                self.selected_item = None;
+                                self.selected_handle = None;
+                            }
+                        }
+
+                        // Handle dragging for selected item
+                        if let Some(selected_idx) = self.selected_item {
+                            if image_response.dragged() && self.selected_handle.is_none() {
+                                let drag_delta = image_response.drag_delta() / scale;
+                                if let Some(item) = self.rectangles.get_mut(selected_idx) {
+                                    item.translate(drag_delta);
+                                }
+                            }
+                        }
                     });
             }
         });
@@ -293,6 +390,17 @@ impl AnnotoApp {
         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
         if let Some(pos) = pointer_pos {
             if image_rect.contains(pos) {
+                // Check if hovering over an item
+                let hovering_index = self
+                    .rectangles
+                    .iter()
+                    .enumerate()
+                    .find(|(_, item)| item.hit_test(pos, image_rect, scale))
+                    .map(|(i, _)| i);
+                if hovering_index.is_some() {
+                    // If hovering over an item, don't start drawing
+                    return;
+                }
                 match self.current_tool {
                     _ => {
                         if image_response.drag_started() {
@@ -464,6 +572,32 @@ impl AnnotoApp {
         }
     }
 
+    fn render_handles(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
+        if let Some(selected_idx) = self.selected_item {
+            if let Some(item) = self.rectangles.get(selected_idx) {
+                let handles = item.get_handles(image_rect, scale);
+                for (pos, handle) in handles {
+                    let rect = egui::Rect::from_center_size(pos, egui::Vec2::splat(10.0));
+                    let response = ui.interact(
+                        rect,
+                        egui::Id::new(format!("handle_{:?}", handle)),
+                        egui::Sense::click_and_drag(),
+                    );
+                    ui.painter().rect_filled(rect, 0.0, egui::Color32::BLUE);
+                    if response.clicked() {
+                        self.selected_handle = Some(handle.clone());
+                    }
+                    if response.dragged() {
+                        let delta = response.drag_delta() / scale;
+                        if let Some(item) = self.rectangles.get_mut(selected_idx) {
+                            item.resize(&handle, delta);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn show_export_dialog(&mut self, ctx: &egui::Context) {
         if self.show_export_dialog {
             let mut open = true;
@@ -610,5 +744,35 @@ impl AnnotoApp {
         a.click();
         web_sys::Url::revoke_object_url(&url).unwrap();
         web_sys::console::log_1(&"Download initiated".into());
+    }
+
+    fn sync_ui_from_selection(&mut self) {
+        if let Some(idx) = self.selected_item {
+            if let Some(item) = self.rectangles.get(idx) {
+                if let Some(w) = item.get_stroke_width() {
+                    self.stroke_width = w;
+                }
+                if let Some(c) = item.get_stroke_color() {
+                    self.stroke_color = c;
+                }
+                if let Some(c) = item.get_fill_color() {
+                    self.fill_color = c;
+                }
+                if let Some(r) = item.get_rounding() {
+                    self.rounding = r;
+                }
+            }
+        }
+    }
+
+    fn update_selected_item(&mut self) {
+        if let Some(idx) = self.selected_item {
+            if let Some(item) = self.rectangles.get_mut(idx) {
+                item.set_stroke_width(self.stroke_width);
+                item.set_stroke_color(self.stroke_color);
+                item.set_fill_color(self.fill_color);
+                item.set_rounding(self.rounding);
+            }
+        }
     }
 }

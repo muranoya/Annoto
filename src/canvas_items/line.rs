@@ -31,6 +31,78 @@ impl Line {
         );
     }
 
+    pub fn hit_test(&self, pos: egui::Pos2, image_rect: egui::Rect, scale: f32) -> bool {
+        let start = image_rect.min
+            + (egui::Pos2 {
+                x: self.start_x,
+                y: self.start_y,
+            } * scale)
+                .to_vec2();
+        let end = image_rect.min
+            + (egui::Pos2 {
+                x: self.end_x,
+                y: self.end_y,
+            } * scale)
+                .to_vec2();
+        let dist = Self::point_to_line_distance(pos, start, end);
+        dist < 15.0 // threshold
+    }
+
+    pub fn translate(&mut self, delta: egui::Vec2) {
+        self.start_x += delta.x;
+        self.start_y += delta.y;
+        self.end_x += delta.x;
+        self.end_y += delta.y;
+    }
+
+    pub fn get_handles(
+        &self,
+        image_rect: egui::Rect,
+        scale: f32,
+    ) -> Vec<(egui::Pos2, crate::canvas_items::Handle)> {
+        let mut handles = Vec::new();
+        let start_world = image_rect.min
+            + egui::Pos2 {
+                x: self.start_x,
+                y: self.start_y,
+            }
+            .to_vec2()
+                * scale;
+        let end_world = image_rect.min
+            + egui::Pos2 {
+                x: self.end_x,
+                y: self.end_y,
+            }
+            .to_vec2()
+                * scale;
+        handles.push((start_world, crate::canvas_items::Handle::Start));
+        handles.push((end_world, crate::canvas_items::Handle::End));
+        handles
+    }
+
+    pub fn resize(&mut self, handle: &crate::canvas_items::Handle, delta: egui::Vec2) {
+        match handle {
+            crate::canvas_items::Handle::Start => {
+                self.start_x += delta.x;
+                self.start_y += delta.y;
+            }
+            crate::canvas_items::Handle::End => {
+                self.end_x += delta.x;
+                self.end_y += delta.y;
+            }
+            _ => {}
+        }
+    }
+
+    fn point_to_line_distance(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+        let ab = b - a;
+        let ap = p - a;
+        let proj = ap.dot(ab) / ab.length_sq();
+        let proj = proj.clamp(0.0, 1.0);
+        let closest = a + proj * ab;
+        (p - closest).length()
+    }
+
     pub fn draw_on_pixmap(&self, pixmap: &mut tiny_skia::Pixmap) {
         let mut paint = tiny_skia::Paint::default();
         paint.set_color_rgba8(
