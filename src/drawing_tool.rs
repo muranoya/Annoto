@@ -4,5 +4,4 @@ pub enum DrawingTool {
     FilledRect,
     Arrow,
     Line,
-    Text,
 }

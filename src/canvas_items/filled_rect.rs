@@ -31,4 +31,30 @@ impl FilledRect {
             self.filled_color,
         );
     }
+
+    pub fn draw_on_pixmap(&self, pixmap: &mut tiny_skia::Pixmap) {
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(
+            self.filled_color.r(),
+            self.filled_color.g(),
+            self.filled_color.b(),
+            self.filled_color.a(),
+        );
+        paint.anti_alias = true;
+
+        let rect =
+            tiny_skia::Rect::from_xywh(self.x1, self.y1, self.x2 - self.x1, self.y2 - self.y1)
+                .unwrap();
+        let mut path = tiny_skia::PathBuilder::new();
+        path.push_rect(rect);
+        let path = path.finish().unwrap();
+
+        pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+    }
 }

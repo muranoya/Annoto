@@ -34,4 +34,32 @@ impl StrokeRect {
             egui::StrokeKind::Middle,
         );
     }
+
+    pub fn draw_on_pixmap(&self, pixmap: &mut tiny_skia::Pixmap) {
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(
+            self.stroke_color.r(),
+            self.stroke_color.g(),
+            self.stroke_color.b(),
+            self.stroke_color.a(),
+        );
+        paint.anti_alias = true;
+
+        let rect =
+            tiny_skia::Rect::from_xywh(self.x1, self.y1, self.x2 - self.x1, self.y2 - self.y1)
+                .unwrap();
+        let mut path = tiny_skia::PathBuilder::new();
+        path.push_rect(rect);
+        let path = path.finish().unwrap();
+
+        let mut stroke = tiny_skia::Stroke::default();
+        stroke.width = self.stroke_width;
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &stroke,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+    }
 }

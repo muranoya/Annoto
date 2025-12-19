@@ -2,13 +2,11 @@ pub mod arrow;
 pub mod filled_rect;
 pub mod line;
 pub mod stroke_rect;
-pub mod text;
 
 pub use arrow::Arrow;
 pub use filled_rect::FilledRect;
 pub use line::Line;
 pub use stroke_rect::StrokeRect;
-pub use text::Text;
 
 #[derive(Clone)]
 pub enum CanvasItem {
@@ -16,5 +14,4 @@ pub enum CanvasItem {
     FilledRect(FilledRect),
     Arrow(Arrow),
     Line(Line),
-    Text(Text),
 }
