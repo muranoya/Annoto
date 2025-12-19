@@ -139,6 +139,7 @@ impl eframe::App for AnnotoApp {
         self.render_side_panel(ctx);
         self.render_central_panel(ctx);
         self.show_export_dialog(ctx);
+        self.handle_keyboard_events(ctx);
     }
 }
 
@@ -774,5 +775,17 @@ impl AnnotoApp {
                 item.set_rounding(self.rounding);
             }
         }
+    }
+
+    fn handle_keyboard_events(&mut self, ctx: &egui::Context) {
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
+                if let Some(idx) = self.selected_item {
+                    self.rectangles.remove(idx);
+                    self.selected_item = None;
+                    self.selected_handle = None;
+                }
+            }
+        });
     }
 }
