@@ -25,6 +25,10 @@ impl FilledRect {
                 .to_vec2();
         let world_rect = egui::Rect::from_min_max(world_min, world_max);
 
-        ui.painter().rect_filled(world_rect, egui::CornerRadius::same(self.rounding), self.filled_color);
+        ui.painter().rect_filled(
+            world_rect,
+            egui::CornerRadius::same(self.rounding),
+            self.filled_color,
+        );
     }
 }
