@@ -10,6 +10,8 @@ eframe = { version = "0.33.0", default-features = false, features = [
 ] }
 egui = "0.33.3"
 image = "0.24"
+tiny-skia = "0.11.4"
+rusttype = "0.9"
 js-sys = "0.3.83"
 log = "0.4.29"
 once_cell = "1.19"
@@ -17,4 +19,4 @@ serde = "1.0.228"
 uuid = "1.19.0"
 wasm-bindgen = "0.2.106"
 wasm-bindgen-futures = "0.4.56"
-web-sys = { version = "0.3.83", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "EventTarget", "Event", "FileList", "File", "FileReader", "Blob", "console"] }
+web-sys = { version = "0.3.83", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "EventTarget", "Event", "FileList", "File", "FileReader", "Blob", "console", "Url"] }

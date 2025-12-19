@@ -23,20 +23,16 @@ pub struct AnnotoApp {
     drag_start: Option<egui::Pos2>,
     stroke_width: f32,
     stroke_color: egui::Color32,
-    fill_enabled: bool,
     fill_color: egui::Color32,
     rounding: u8,
     current_tool: DrawingTool,
 
-    // Text input related
-    text_input_mode: bool,
-    text_position: Option<egui::Pos2>,
-    text_content: String,
-    text_font_size: f32,
-    text_color: egui::Color32,
-
     // Cursor position
     cursor_pos: Option<egui::Pos2>,
+
+    // Export related
+    show_export_dialog: bool,
+    export_format: String,
 }
 
 impl Default for AnnotoApp {
@@ -49,16 +45,12 @@ impl Default for AnnotoApp {
             drag_start: None,
             stroke_width: 3.0,
             stroke_color: egui::Color32::RED,
-            fill_enabled: false,
             fill_color: egui::Color32::from_rgba_premultiplied(255, 0, 0, 128),
             rounding: 0,
             current_tool: DrawingTool::StrokeRect,
-            text_input_mode: false,
-            text_position: None,
-            text_content: String::new(),
-            text_font_size: 20.0,
-            text_color: egui::Color32::BLACK,
             cursor_pos: None,
+            show_export_dialog: false,
+            export_format: "PNG".to_string(),
         }
     }
 }
@@ -139,6 +131,7 @@ impl eframe::App for AnnotoApp {
         self.render_top_panel(ctx);
         self.render_side_panel(ctx);
         self.render_central_panel(ctx);
+        self.show_export_dialog(ctx);
     }
 }
 
@@ -152,6 +145,7 @@ impl AnnotoApp {
                 let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
                 self.image_texture =
                     Some(ctx.load_texture("image", color_image, egui::TextureOptions::default()));
+                self.image_bytes = Some(bytes);
             }
         }
     }
@@ -162,6 +156,9 @@ impl AnnotoApp {
                 ui.menu_button("File", |ui| {
                     if ui.button("ファイルを開く").clicked() {
                         Self::open_file_dialog();
+                    }
+                    if ui.button("エクスポート").clicked() {
+                        self.show_export_dialog = true;
                     }
                 });
                 ui.add_space(16.0);
@@ -212,12 +209,6 @@ impl AnnotoApp {
                 .clicked()
             {
                 self.current_tool = DrawingTool::Line;
-            }
-            if ui
-                .selectable_label(matches!(self.current_tool, DrawingTool::Text), "テキスト")
-                .clicked()
-            {
-                self.current_tool = DrawingTool::Text;
             }
             ui.add_space(16.0);
             ui.label("線の太さ:");
@@ -287,7 +278,6 @@ impl AnnotoApp {
                         self.handle_drawing_mode(ui, &image_response, image_rect, scale);
                         self.render_existing_items(ui, image_rect, scale);
                         self.render_drag_preview(ui, image_rect, scale);
-                        self.handle_text_input(ui, image_rect, scale);
                     });
             }
         });
@@ -304,13 +294,6 @@ impl AnnotoApp {
         if let Some(pos) = pointer_pos {
             if image_rect.contains(pos) {
                 match self.current_tool {
-                    DrawingTool::Text => {
-                        if image_response.clicked() {
-                            self.text_position = Some(pos);
-                            self.text_input_mode = true;
-                            self.text_content.clear();
-                        }
-                    }
                     _ => {
                         if image_response.drag_started() {
                             self.drag_start = Some(pos);
@@ -375,7 +358,6 @@ impl AnnotoApp {
                                             stroke_color: self.stroke_color,
                                         }));
                                     }
-                                    DrawingTool::Text => {} // Already handled above
                                 }
                                 self.drag_start = None;
                             }
@@ -393,7 +375,6 @@ impl AnnotoApp {
                 CanvasItem::FilledRect(rect) => rect.render(ui, image_rect, scale),
                 CanvasItem::Arrow(arrow) => arrow.render(ui, image_rect, scale),
                 CanvasItem::Line(line) => line.render(ui, image_rect, scale),
-                CanvasItem::Text(text) => text.render(ui, image_rect, scale),
             };
         }
     }
@@ -480,61 +461,154 @@ impl AnnotoApp {
                 };
                 preview.render(ui, image_rect, scale);
             }
-            DrawingTool::Text => {} // No preview for text
         }
     }
 
-    fn handle_text_input(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
-        if self.text_input_mode {
-            if let Some(pos) = self.text_position {
-                // Show a window for text input
-                let mut open = true;
-                egui::Window::new("テキスト入力")
-                    .open(&mut open)
-                    .show(ui.ctx(), |ui| {
-                        ui.label("テキストを入力してください:");
-                        let response = ui.add(
-                            egui::TextEdit::multiline(&mut self.text_content)
-                                .font(egui::FontId::new(16.0, egui::FontFamily::Proportional))
-                                .desired_width(300.0)
-                                .desired_rows(3),
-                        );
-                        response.request_focus();
-
-                        ui.horizontal(|ui| {
-                            if ui.button("確定").clicked()
-                                || ui.input(|i| i.key_pressed(egui::Key::Enter))
-                            {
-                                if !self.text_content.is_empty() {
-                                    let offset_pos = (pos - image_rect.min) / scale;
-                                    self.rectangles.push(CanvasItem::Text(Text {
-                                        x: offset_pos.x,
-                                        y: offset_pos.y,
-                                        content: self.text_content.clone(),
-                                        font_size: self.text_font_size,
-                                        color: self.text_color,
-                                    }));
-                                }
-                                self.text_input_mode = false;
-                                self.text_position = None;
-                                self.text_content.clear();
-                            }
-                            if ui.button("キャンセル").clicked()
-                                || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                            {
-                                self.text_input_mode = false;
-                                self.text_position = None;
-                                self.text_content.clear();
-                            }
-                        });
+    fn show_export_dialog(&mut self, ctx: &egui::Context) {
+        if self.show_export_dialog {
+            let mut open = true;
+            egui::Window::new("エクスポート")
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label("出力フォーマット:");
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(self.export_format == "PNG", "PNG")
+                            .clicked()
+                        {
+                            self.export_format = "PNG".to_string();
+                        }
+                        if ui
+                            .selectable_label(self.export_format == "JPEG", "JPEG")
+                            .clicked()
+                        {
+                            self.export_format = "JPEG".to_string();
+                        }
                     });
-
-                if !open {
-                    self.text_input_mode = false;
-                    self.text_position = None;
-                    self.text_content.clear();
-                }
+                    ui.horizontal(|ui| {
+                        let can_export = self.image_bytes.is_some();
+                        if ui
+                            .add_enabled(can_export, egui::Button::new("エクスポート"))
+                            .clicked()
+                        {
+                            self.export_image();
+                            self.show_export_dialog = false;
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            self.show_export_dialog = false;
+                        }
+                    });
+                    if self.image_bytes.is_none() {
+                        ui.label("画像をロードしてください。");
+                    }
+                });
+            if !open {
+                self.show_export_dialog = false;
             }
         }
+    }
+
+    fn export_image(&self) {
+        web_sys::console::log_1(&"Exporting image".into());
+        if let Some(image_bytes) = &self.image_bytes {
+            if let Ok(img) = image::load_from_memory(image_bytes) {
+                let rgba_img = img.to_rgba8();
+                let width = rgba_img.width() as u32;
+                let height = rgba_img.height() as u32;
+                let mut pixmap = tiny_skia::Pixmap::new(width, height).unwrap();
+                // Copy image data
+                for (i, pixel) in rgba_img.pixels().enumerate() {
+                    let color =
+                        tiny_skia::Color::from_rgba8(pixel[0], pixel[1], pixel[2], pixel[3]);
+                    pixmap.pixels_mut()[i] = color.premultiply().to_color_u8();
+                }
+                // Draw shapes on the pixmap
+                for item in &self.rectangles {
+                    match item {
+                        CanvasItem::StrokeRect(rect) => rect.draw_on_pixmap(&mut pixmap),
+                        CanvasItem::FilledRect(rect) => rect.draw_on_pixmap(&mut pixmap),
+                        CanvasItem::Arrow(arrow) => arrow.draw_on_pixmap(&mut pixmap),
+                        CanvasItem::Line(line) => line.draw_on_pixmap(&mut pixmap),
+                    }
+                }
+                // Convert pixmap to RgbaImage
+                let mut rgba_img = image::RgbaImage::new(width, height);
+                for (i, pixel) in pixmap.pixels().iter().enumerate() {
+                    let x = (i % width as usize) as u32;
+                    let y = (i / width as usize) as u32;
+                    let color = tiny_skia::Color::from_rgba8(
+                        pixel.red(),
+                        pixel.green(),
+                        pixel.blue(),
+                        pixel.alpha(),
+                    );
+                    rgba_img.put_pixel(
+                        x,
+                        y,
+                        image::Rgba([
+                            (color.red() * 255.0) as u8,
+                            (color.green() * 255.0) as u8,
+                            (color.blue() * 255.0) as u8,
+                            (color.alpha() * 255.0) as u8,
+                        ]),
+                    );
+                }
+                // Encode and download
+                let data = match self.export_format.as_str() {
+                    "PNG" => {
+                        let mut buffer = Vec::new();
+                        rgba_img
+                            .write_to(
+                                &mut std::io::Cursor::new(&mut buffer),
+                                image::ImageFormat::Png,
+                            )
+                            .unwrap();
+                        buffer
+                    }
+                    "JPEG" => {
+                        let mut buffer = Vec::new();
+                        rgba_img
+                            .write_to(
+                                &mut std::io::Cursor::new(&mut buffer),
+                                image::ImageFormat::Jpeg,
+                            )
+                            .unwrap();
+                        buffer
+                    }
+                    _ => return,
+                };
+                web_sys::console::log_1(&format!("Data length: {}", data.len()).into());
+                self.download_image(&data, &self.export_format.to_lowercase());
+            } else {
+                web_sys::console::log_1(&"Failed to load image".into());
+            }
+        } else {
+            web_sys::console::log_1(&"No image bytes".into());
+        }
+    }
+
+    fn download_image(&self, data: &[u8], format: &str) {
+        web_sys::console::log_1(&"Creating blob".into());
+        let bag = web_sys::BlobPropertyBag::new();
+        bag.set_type(&format!("image/{}", format));
+        let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(
+            &js_sys::Array::of1(&js_sys::Uint8Array::from(data)),
+            &bag,
+        )
+        .unwrap();
+        let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
+        web_sys::console::log_1(&format!("Blob URL: {}", url).into());
+        let document = web_sys::window().unwrap().document().unwrap();
+        let a = document
+            .create_element("a")
+            .unwrap()
+            .dyn_into::<web_sys::HtmlElement>()
+            .unwrap();
+        a.set_attribute("href", &url).unwrap();
+        a.set_attribute("download", &format!("exported.{}", format))
+            .unwrap();
+        a.click();
+        web_sys::Url::revoke_object_url(&url).unwrap();
+        web_sys::console::log_1(&"Download initiated".into());
     }
 }
