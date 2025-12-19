@@ -1,5 +1,5 @@
 use egui::{
-    Pos2,
+    Pos2, Rect, Ui,
     epaint::{ColorMode, PathShape, PathStroke},
 };
 
@@ -14,7 +14,7 @@ pub struct Arrow {
 }
 
 impl Arrow {
-    pub fn render(&self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
+    pub fn render(&self, ui: &mut Ui, image_rect: Rect, scale: f32) {
         let start = image_rect.min
             + (egui::Pos2 {
                 x: self.start_x,
@@ -30,7 +30,7 @@ impl Arrow {
 
         let dx = end.x - start.x;
         let dy = end.y - start.y;
-        let line_rad = (dy as f32).atan2(dx as f32);
+        let line_rad = dy.atan2(dx);
 
         let path_stroke = PathStroke {
             width: 1.0,
@@ -42,11 +42,11 @@ impl Arrow {
             x: start.x,
             y: start.y,
         });
-        points.push(Self::calc_point(&end, line_rad, 20.0, 45.0));
-        points.push(Self::calc_point(&end, line_rad, 40.0, 55.0));
+        points.push(Self::calc_point(&end, line_rad, 20.0, 65.0));
+        points.push(Self::calc_point(&end, line_rad, 30.0, 75.0));
         points.push(Pos2 { x: end.x, y: end.y });
-        points.push(Self::calc_point(&end, line_rad, -40.0, 55.0));
-        points.push(Self::calc_point(&end, line_rad, -20.0, 45.0));
+        points.push(Self::calc_point(&end, line_rad, -30.0, 75.0));
+        points.push(Self::calc_point(&end, line_rad, -20.0, 65.0));
         let path = PathShape {
             points: points,
             closed: true,

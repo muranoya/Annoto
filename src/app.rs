@@ -234,7 +234,10 @@ impl AnnotoApp {
                 ui.label("塗りつぶし色:");
                 ui.color_edit_button_srgba(&mut self.fill_color);
             }
-            if matches!(self.current_tool, DrawingTool::StrokeRect | DrawingTool::FilledRect) {
+            if matches!(
+                self.current_tool,
+                DrawingTool::StrokeRect | DrawingTool::FilledRect
+            ) {
                 ui.add_space(16.0);
                 ui.label("角の丸め:");
                 ui.add(
