@@ -19,4 +19,4 @@ serde = "1.0.228"
 uuid = "1.19.0"
 wasm-bindgen = "0.2.106"
 wasm-bindgen-futures = "0.4.56"
-web-sys = { version = "0.3.83", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "EventTarget", "Event", "FileList", "File", "FileReader", "Blob", "console", "Url"] }
+web-sys = { version = "0.3.83", features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "EventTarget", "Event", "FileList", "File", "FileReader", "Blob", "console", "Url", "TouchEvent", "Touch", "TouchList"] }

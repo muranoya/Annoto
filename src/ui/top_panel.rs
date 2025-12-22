@@ -1,4 +1,4 @@
-use crate::state::{AppMode, DrawingState, UiState};
+use crate::state::{DrawingState, UiState};
 use egui;
 
 pub fn render_top_panel(
@@ -17,20 +17,6 @@ pub fn render_top_panel(
                     ui_state.show_export_dialog = true;
                 }
             });
-            ui.add_space(16.0);
-            ui.label("モード:");
-            if ui
-                .selectable_label(ui_state.mode == AppMode::Drawing, "描画")
-                .clicked()
-            {
-                ui_state.mode = AppMode::Drawing;
-            }
-            if ui
-                .selectable_label(ui_state.mode == AppMode::View, "表示")
-                .clicked()
-            {
-                ui_state.mode = AppMode::View;
-            }
             ui.add_space(16.0);
             ui.label("倍率:");
             ui.add(
