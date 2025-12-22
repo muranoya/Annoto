@@ -7,6 +7,12 @@ use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
 use web_sys::{File, FileReader, HtmlInputElement};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AppMode {
+    Drawing,
+    View,
+}
+
 struct AppState {
     image_bytes: Option<Vec<u8>>,
 }
@@ -37,6 +43,18 @@ pub struct AnnotoApp {
     // Export related
     show_export_dialog: bool,
     export_format: String,
+
+    // Mode
+    mode: AppMode,
+
+    // View mode pan offset
+    pan_offset: egui::Vec2,
+
+    // Previous touch distance for pinch zoom detection
+    prev_touch_distance: Option<f32>,
+
+    // Touch points for pinch zoom
+    touch_points: Vec<egui::Pos2>,
 }
 
 impl Default for AnnotoApp {
@@ -57,6 +75,10 @@ impl Default for AnnotoApp {
             selected_handle: None,
             show_export_dialog: false,
             export_format: "PNG".to_string(),
+            mode: AppMode::Drawing,
+            pan_offset: egui::Vec2::ZERO,
+            prev_touch_distance: None,
+            touch_points: Vec::new(),
         }
     }
 }
@@ -170,6 +192,20 @@ impl AnnotoApp {
                     }
                 });
                 ui.add_space(16.0);
+                ui.label("モード:");
+                if ui
+                    .selectable_label(self.mode == AppMode::Drawing, "描画")
+                    .clicked()
+                {
+                    self.mode = AppMode::Drawing;
+                }
+                if ui
+                    .selectable_label(self.mode == AppMode::View, "表示")
+                    .clicked()
+                {
+                    self.mode = AppMode::View;
+                }
+                ui.add_space(16.0);
                 ui.label("倍率:");
                 ui.add(
                     egui::DragValue::new(&mut self.zoom)
@@ -186,6 +222,9 @@ impl AnnotoApp {
     }
 
     fn render_side_panel(&mut self, ctx: &egui::Context) {
+        if self.mode != AppMode::Drawing {
+            return;
+        }
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
             ui.label("描画ツール");
             if ui
@@ -301,7 +340,12 @@ impl AnnotoApp {
                         let scaled_size = texture.size_vec2() * scale;
                         let image_response =
                             ui.allocate_response(scaled_size, egui::Sense::click_and_drag());
-                        let image_rect = image_response.rect;
+                        let mut image_rect = image_response.rect;
+
+                        // Apply pan offset in view mode
+                        if self.mode == AppMode::View {
+                            image_rect = image_rect.translate(self.pan_offset);
+                        }
 
                         // 画像を描画
                         ui.painter().image(
@@ -322,59 +366,81 @@ impl AnnotoApp {
                             self.cursor_pos = None;
                         }
 
-                        self.handle_drawing_mode(ui, &image_response, image_rect, scale);
-                        self.render_existing_items(ui, image_rect, scale);
-                        self.render_drag_preview(ui, image_rect, scale);
-                        self.render_handles(ui, image_rect, scale);
+                        if self.mode == AppMode::Drawing {
+                            self.handle_drawing_mode(ui, &image_response, image_rect, scale);
+                            self.render_existing_items(ui, image_rect, scale);
+                            self.render_drag_preview(ui, image_rect, scale);
+                            self.render_handles(ui, image_rect, scale);
 
-                        // Set cursor and handle selection
-                        let mut hovering_index = None;
-                        if let Some(pos) = pointer_pos {
-                            if image_rect.contains(pos) {
-                                for (i, item) in self.rectangles.iter().enumerate() {
-                                    if item.hit_test(pos, image_rect, scale) {
-                                        hovering_index = Some(i);
-                                        break;
+                            // Set cursor and handle selection
+                            let mut hovering_index = None;
+                            if let Some(pos) = pointer_pos {
+                                if image_rect.contains(pos) {
+                                    for (i, item) in self.rectangles.iter().enumerate() {
+                                        if item.hit_test(pos, image_rect, scale) {
+                                            hovering_index = Some(i);
+                                            break;
+                                        }
+                                    }
+                                    if hovering_index.is_some() {
+                                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                                    } else {
+                                        ui.output_mut(|o| {
+                                            o.cursor_icon = egui::CursorIcon::Default
+                                        });
                                     }
                                 }
-                                if hovering_index.is_some() {
-                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                            }
+
+                            // Handle click for selection
+                            if image_response.clicked() {
+                                if let Some(idx) = hovering_index {
+                                    self.selected_item = Some(idx);
+                                    self.selected_handle = None;
                                 } else {
-                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Default);
+                                    self.selected_item = None;
+                                    self.selected_handle = None;
                                 }
                             }
-                        }
 
-                        // Handle click for selection
-                        if image_response.clicked() {
-                            if let Some(idx) = hovering_index {
-                                self.selected_item = Some(idx);
-                                self.selected_handle = None;
-                            } else {
-                                self.selected_item = None;
-                                self.selected_handle = None;
-                            }
-                        }
-
-                        // Handle drag start for selection (in case drag starts without click)
-                        if image_response.drag_started() {
-                            if let Some(idx) = hovering_index {
-                                self.selected_item = Some(idx);
-                                self.selected_handle = None;
-                            } else {
-                                self.selected_item = None;
-                                self.selected_handle = None;
-                            }
-                        }
-
-                        // Handle dragging for selected item
-                        if let Some(selected_idx) = self.selected_item {
-                            if image_response.dragged() && self.selected_handle.is_none() {
-                                let drag_delta = image_response.drag_delta() / scale;
-                                if let Some(item) = self.rectangles.get_mut(selected_idx) {
-                                    item.translate(drag_delta);
+                            // Handle drag start for selection (in case drag starts without click)
+                            if image_response.drag_started() {
+                                if let Some(idx) = hovering_index {
+                                    self.selected_item = Some(idx);
+                                    self.selected_handle = None;
+                                } else {
+                                    self.selected_item = None;
+                                    self.selected_handle = None;
                                 }
                             }
+
+                            // Handle dragging for selected item
+                            if let Some(selected_idx) = self.selected_item {
+                                if image_response.dragged() && self.selected_handle.is_none() {
+                                    let drag_delta = image_response.drag_delta() / scale;
+                                    if let Some(item) = self.rectangles.get_mut(selected_idx) {
+                                        item.translate(drag_delta);
+                                    }
+                                }
+                            }
+                        } else {
+                            // View mode: render items but no editing
+                            self.render_existing_items(ui, image_rect, scale);
+
+                            // Handle panning in view mode
+                            if image_response.dragged() {
+                                self.pan_offset += image_response.drag_delta();
+                            }
+
+                            // Handle zoom with mouse wheel
+                            let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+                            if scroll_delta != 0.0 {
+                                let zoom_factor = if scroll_delta > 0.0 { 1.1 } else { 0.9 };
+                                self.zoom = (self.zoom * zoom_factor).clamp(1.0, 500.0);
+                            }
+
+                            // Handle pinch zoom on mobile (using egui's native touch support)
+                            self.handle_pinch_zoom_native(ui);
                         }
                     });
             }
@@ -778,6 +844,9 @@ impl AnnotoApp {
     }
 
     fn handle_keyboard_events(&mut self, ctx: &egui::Context) {
+        if self.mode != AppMode::Drawing {
+            return;
+        }
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
                 if let Some(idx) = self.selected_item {
@@ -787,5 +856,53 @@ impl AnnotoApp {
                 }
             }
         });
+    }
+
+    fn handle_pinch_zoom_native(&mut self, ui: &egui::Ui) {
+        // Get touch events from egui
+        let touch_events = ui.input(|i| {
+            let mut events = Vec::new();
+            for event in &i.events {
+                if let egui::Event::Touch {
+                    device_id: _,
+                    id: _,
+                    phase: _,
+                    pos,
+                    force: _,
+                } = event
+                {
+                    events.push(*pos);
+                }
+            }
+            events
+        });
+
+        // Update touch points
+        if !touch_events.is_empty() {
+            self.touch_points = touch_events;
+        }
+
+        // Detect pinch zoom with 2 touch points
+        if self.touch_points.len() >= 2 {
+            let current_distance = (self.touch_points[0] - self.touch_points[1]).length();
+
+            if let Some(prev_dist) = self.prev_touch_distance {
+                if prev_dist > 0.0 {
+                    let zoom_factor = current_distance / prev_dist;
+
+                    // Apply zoom based on the factor
+                    if zoom_factor > 1.01 {
+                        self.zoom = (self.zoom * 1.05).clamp(1.0, 500.0);
+                    } else if zoom_factor < 0.99 {
+                        self.zoom = (self.zoom * 0.95).clamp(1.0, 500.0);
+                    }
+                }
+            }
+
+            self.prev_touch_distance = Some(current_distance);
+        } else {
+            self.prev_touch_distance = None;
+            self.touch_points.clear();
+        }
     }
 }
