@@ -15,6 +15,7 @@ pub enum Handle {
     Corner(usize),
     Start,
     End,
+    Delete,
 }
 
 #[derive(Clone)]

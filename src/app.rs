@@ -198,7 +198,7 @@ impl AnnotoApp {
                                 image_rect,
                                 scale,
                             );
-                            ItemRenderer::render_handles(
+                            let should_delete = ItemRenderer::render_handles(
                                 ui,
                                 self.selection_state.selected_item,
                                 &mut self.selection_state.selected_handle,
@@ -206,6 +206,14 @@ impl AnnotoApp {
                                 image_rect,
                                 scale,
                             );
+
+                            if should_delete {
+                                if let Some(idx) = self.selection_state.selected_item {
+                                    self.rectangles.remove(idx);
+                                    self.selection_state.selected_item = None;
+                                    self.selection_state.selected_handle = None;
+                                }
+                            }
 
                             let mut hovering_index = None;
                             if let Some(pos) = pointer_pos {

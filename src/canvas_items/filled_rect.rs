@@ -60,19 +60,23 @@ impl FilledRect {
         match handle {
             crate::canvas_items::Handle::Corner(index) => {
                 match *index {
-                    0 => { // top-left
+                    0 => {
+                        // top-left
                         self.x1 += delta.x;
                         self.y1 += delta.y;
                     }
-                    1 => { // top-right
+                    1 => {
+                        // top-right
                         self.x2 += delta.x;
                         self.y1 += delta.y;
                     }
-                    2 => { // bottom-left
+                    2 => {
+                        // bottom-left
                         self.x1 += delta.x;
                         self.y2 += delta.y;
                     }
-                    3 => { // bottom-right
+                    3 => {
+                        // bottom-right
                         self.x2 += delta.x;
                         self.y2 += delta.y;
                     }
