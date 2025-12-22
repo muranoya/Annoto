@@ -1,6 +1,10 @@
 mod app;
 mod canvas_items;
+mod drawing;
 mod drawing_tool;
+mod export;
+mod state;
+mod ui;
 use crate::app::AnnotoApp;
 use eframe::wasm_bindgen::JsCast as _;
 

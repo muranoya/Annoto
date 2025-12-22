@@ -1,18 +1,21 @@
 pub mod arrow;
 pub mod filled_rect;
 pub mod line;
+pub mod mosaic;
 pub mod stroke_rect;
 
 pub use arrow::Arrow;
 pub use filled_rect::FilledRect;
 pub use line::Line;
+pub use mosaic::Mosaic;
 pub use stroke_rect::StrokeRect;
 
 #[derive(Clone, Debug)]
 pub enum Handle {
-    Corner(usize), // 0: top-left, 1: top-right, 2: bottom-left, 3: bottom-right
+    Corner(usize),
     Start,
     End,
+    Delete,
 }
 
 #[derive(Clone)]
@@ -21,6 +24,7 @@ pub enum CanvasItem {
     FilledRect(FilledRect),
     Arrow(Arrow),
     Line(Line),
+    Mosaic(Mosaic),
 }
 
 impl CanvasItem {
@@ -30,6 +34,7 @@ impl CanvasItem {
             CanvasItem::FilledRect(item) => item.hit_test(pos, image_rect, scale),
             CanvasItem::Arrow(item) => item.hit_test(pos, image_rect, scale),
             CanvasItem::Line(item) => item.hit_test(pos, image_rect, scale),
+            CanvasItem::Mosaic(item) => item.hit_test(pos, image_rect, scale),
         }
     }
 
@@ -39,15 +44,7 @@ impl CanvasItem {
             CanvasItem::FilledRect(item) => item.translate(delta),
             CanvasItem::Arrow(item) => item.translate(delta),
             CanvasItem::Line(item) => item.translate(delta),
-        }
-    }
-
-    pub fn get_handles(&self, image_rect: egui::Rect, scale: f32) -> Vec<(egui::Pos2, Handle)> {
-        match self {
-            CanvasItem::StrokeRect(item) => item.get_handles(image_rect, scale),
-            CanvasItem::FilledRect(item) => item.get_handles(image_rect, scale),
-            CanvasItem::Arrow(item) => item.get_handles(image_rect, scale),
-            CanvasItem::Line(item) => item.get_handles(image_rect, scale),
+            CanvasItem::Mosaic(item) => item.translate(delta),
         }
     }
 
@@ -57,6 +54,17 @@ impl CanvasItem {
             CanvasItem::FilledRect(item) => item.resize(handle, delta),
             CanvasItem::Arrow(item) => item.resize(handle, delta),
             CanvasItem::Line(item) => item.resize(handle, delta),
+            CanvasItem::Mosaic(item) => item.resize(handle, delta),
+        }
+    }
+
+    pub fn get_handles(&self, image_rect: egui::Rect, scale: f32) -> Vec<(egui::Pos2, Handle)> {
+        match self {
+            CanvasItem::StrokeRect(item) => item.get_handles(image_rect, scale),
+            CanvasItem::FilledRect(item) => item.get_handles(image_rect, scale),
+            CanvasItem::Arrow(item) => item.get_handles(image_rect, scale),
+            CanvasItem::Line(item) => item.get_handles(image_rect, scale),
+            CanvasItem::Mosaic(item) => item.get_handles(image_rect, scale),
         }
     }
 
@@ -64,6 +72,7 @@ impl CanvasItem {
         match self {
             CanvasItem::StrokeRect(item) => Some(item.stroke_width),
             CanvasItem::Line(item) => Some(item.stroke_width),
+            CanvasItem::Mosaic(item) => Some(item.granularity as f32),
             _ => None,
         }
     }
@@ -72,6 +81,7 @@ impl CanvasItem {
         match self {
             CanvasItem::StrokeRect(item) => item.stroke_width = width,
             CanvasItem::Line(item) => item.stroke_width = width,
+            CanvasItem::Mosaic(item) => item.set_granularity(width as u8),
             _ => {}
         }
     }

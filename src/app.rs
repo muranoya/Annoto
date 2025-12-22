@@ -1,5 +1,8 @@
 use crate::canvas_items::*;
-use crate::drawing_tool::DrawingTool;
+use crate::drawing::{ItemRenderer, PreviewRenderer, ShapeFactory};
+use crate::export::{DownloadHandler, ImageExporter};
+use crate::state::{AppMode, DrawingState, SelectionState, UiState};
+use crate::ui;
 use egui::{FontData, FontDefinitions, FontFamily};
 use js_sys;
 use once_cell::sync::Lazy;
@@ -17,26 +20,12 @@ static APP_STATE: Lazy<Arc<Mutex<AppState>>> =
 pub struct AnnotoApp {
     image_texture: Option<egui::TextureHandle>,
     image_bytes: Option<Vec<u8>>,
-
-    zoom: f32,
     rectangles: Vec<CanvasItem>,
-    drag_start: Option<egui::Pos2>,
-    stroke_width: f32,
-    stroke_color: egui::Color32,
-    fill_color: egui::Color32,
-    rounding: u8,
-    current_tool: DrawingTool,
 
-    // Cursor position
-    cursor_pos: Option<egui::Pos2>,
-
-    // Selection
-    selected_item: Option<usize>,
-    selected_handle: Option<crate::canvas_items::Handle>,
-
-    // Export related
-    show_export_dialog: bool,
-    export_format: String,
+    // State management
+    drawing_state: DrawingState,
+    ui_state: UiState,
+    selection_state: SelectionState,
 }
 
 impl Default for AnnotoApp {
@@ -44,19 +33,10 @@ impl Default for AnnotoApp {
         Self {
             image_texture: None,
             image_bytes: None,
-            zoom: 100.0,
             rectangles: Vec::new(),
-            drag_start: None,
-            stroke_width: 3.0,
-            stroke_color: egui::Color32::RED,
-            fill_color: egui::Color32::from_rgba_premultiplied(255, 0, 0, 128),
-            rounding: 0,
-            current_tool: DrawingTool::StrokeRect,
-            cursor_pos: None,
-            selected_item: None,
-            selected_handle: None,
-            show_export_dialog: false,
-            export_format: "PNG".to_string(),
+            drawing_state: DrawingState::default(),
+            ui_state: UiState::default(),
+            selection_state: SelectionState::default(),
         }
     }
 }
@@ -70,18 +50,16 @@ impl AnnotoApp {
                 "../fonts/NotoSansJP-Regular.ttf"
             ))),
         );
-        // Put my font first (highest priority):
         fonts
             .families
             .get_mut(&FontFamily::Proportional)
             .unwrap()
             .insert(0, "NotoSansRegular".to_owned());
-        // Put my font as last fallback for monospace:
         fonts
             .families
             .get_mut(&FontFamily::Monospace)
             .unwrap()
-            .push("my_font".to_owned());
+            .push("NotoSansRegular".to_owned());
         ctx.set_fonts(fonts);
     }
 
@@ -126,7 +104,6 @@ impl AnnotoApp {
 
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self::setup_fonts(&cc.egui_ctx);
-
         Default::default()
     }
 }
@@ -134,15 +111,183 @@ impl AnnotoApp {
 impl eframe::App for AnnotoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_image_loading(ctx);
-        self.render_top_panel(ctx);
+
+        ui::render_top_panel(
+            ctx,
+            &mut self.drawing_state,
+            &mut self.ui_state,
+            Self::open_file_dialog,
+        );
+
         self.sync_ui_from_selection();
-        self.render_side_panel(ctx);
-        self.render_central_panel(ctx);
-        self.show_export_dialog(ctx);
+
+        ui::render_side_panel(
+            ctx,
+            &mut self.drawing_state,
+            &self.ui_state,
+            self.selection_state.selected_item,
+            &self.rectangles,
+            || {},
+        );
+
+        // Render central panel with closures
+        self.render_central_panel_with_closures(ctx);
+
+        let should_export =
+            ui::show_export_dialog(ctx, &mut self.ui_state, self.image_bytes.as_ref(), || {});
+
+        if should_export {
+            self.export_image();
+        }
+
+        // Update selected item after UI rendering
+        self.update_selected_item();
+
+        self.handle_keyboard_events(ctx);
     }
 }
 
 impl AnnotoApp {
+    fn render_central_panel_with_closures(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(texture) = &self.image_texture.clone() {
+                let scale = self.drawing_state.zoom / 100.0;
+
+                egui::ScrollArea::both()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+
+                        let scaled_size = texture.size_vec2() * scale;
+                        let image_response =
+                            ui.allocate_response(scaled_size, egui::Sense::click_and_drag());
+                        let mut image_rect = image_response.rect;
+
+                        if self.ui_state.mode == AppMode::View {
+                            image_rect = image_rect.translate(self.ui_state.pan_offset);
+                        }
+
+                        ui.painter().image(
+                            texture.id(),
+                            image_rect,
+                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(1.0)),
+                            egui::Color32::WHITE,
+                        );
+
+                        if let Some(pos) = pointer_pos {
+                            if image_rect.contains(pos) {
+                                let cursor_in_image = (pos - image_rect.min) / scale;
+                                self.ui_state.cursor_pos =
+                                    Some(egui::Pos2::new(cursor_in_image.x, cursor_in_image.y));
+                            }
+                        } else {
+                            self.ui_state.cursor_pos = None;
+                        }
+
+                        if self.ui_state.mode == AppMode::Drawing {
+                            self.handle_drawing_mode(ui, &image_response, image_rect, scale);
+                            ItemRenderer::render_existing_items(
+                                ui,
+                                &mut self.rectangles,
+                                image_rect,
+                                scale,
+                            );
+                            PreviewRenderer::render_drag_preview(
+                                ui,
+                                &self.drawing_state,
+                                image_rect,
+                                scale,
+                            );
+                            let should_delete = ItemRenderer::render_handles(
+                                ui,
+                                self.selection_state.selected_item,
+                                &mut self.selection_state.selected_handle,
+                                &mut self.rectangles,
+                                image_rect,
+                                scale,
+                            );
+
+                            if should_delete {
+                                if let Some(idx) = self.selection_state.selected_item {
+                                    self.rectangles.remove(idx);
+                                    self.selection_state.selected_item = None;
+                                    self.selection_state.selected_handle = None;
+                                }
+                            }
+
+                            let mut hovering_index = None;
+                            if let Some(pos) = pointer_pos {
+                                if image_rect.contains(pos) {
+                                    for (i, item) in self.rectangles.iter().enumerate() {
+                                        if item.hit_test(pos, image_rect, scale) {
+                                            hovering_index = Some(i);
+                                            break;
+                                        }
+                                    }
+                                    if hovering_index.is_some() {
+                                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                                    } else {
+                                        ui.output_mut(|o| {
+                                            o.cursor_icon = egui::CursorIcon::Default
+                                        });
+                                    }
+                                }
+                            }
+
+                            if image_response.clicked() {
+                                if let Some(idx) = hovering_index {
+                                    self.selection_state.selected_item = Some(idx);
+                                    self.selection_state.selected_handle = None;
+                                } else {
+                                    self.selection_state.selected_item = None;
+                                    self.selection_state.selected_handle = None;
+                                }
+                            }
+
+                            if image_response.drag_started() {
+                                if let Some(idx) = hovering_index {
+                                    self.selection_state.selected_item = Some(idx);
+                                    self.selection_state.selected_handle = None;
+                                } else {
+                                    self.selection_state.selected_item = None;
+                                    self.selection_state.selected_handle = None;
+                                }
+                            }
+
+                            if let Some(selected_idx) = self.selection_state.selected_item {
+                                if image_response.dragged()
+                                    && self.selection_state.selected_handle.is_none()
+                                {
+                                    let drag_delta = image_response.drag_delta() / scale;
+                                    if let Some(item) = self.rectangles.get_mut(selected_idx) {
+                                        item.translate(drag_delta);
+                                    }
+                                }
+                            }
+                        } else {
+                            ItemRenderer::render_existing_items(
+                                ui,
+                                &mut self.rectangles,
+                                image_rect,
+                                scale,
+                            );
+
+                            if image_response.dragged() {
+                                self.ui_state.pan_offset += image_response.drag_delta();
+                            }
+
+                            let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+                            if scroll_delta != 0.0 {
+                                let zoom_factor = if scroll_delta > 0.0 { 1.1 } else { 0.9 };
+                                self.drawing_state.zoom =
+                                    (self.drawing_state.zoom * zoom_factor).clamp(1.0, 500.0);
+                            }
+                        }
+                    });
+            }
+        });
+    }
+
     fn handle_image_loading(&mut self, ctx: &egui::Context) {
         if let Some(bytes) = APP_STATE.lock().unwrap().image_bytes.take() {
             if let Ok(img) = image::load_from_memory(&bytes) {
@@ -157,229 +302,6 @@ impl AnnotoApp {
         }
     }
 
-    fn render_top_panel(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("ファイルを開く").clicked() {
-                        Self::open_file_dialog();
-                    }
-                    if ui.button("エクスポート").clicked() {
-                        self.show_export_dialog = true;
-                    }
-                });
-                ui.add_space(16.0);
-                ui.label("倍率:");
-                ui.add(
-                    egui::DragValue::new(&mut self.zoom)
-                        .range(1.0..=500.0)
-                        .suffix("%"),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(pos) = self.cursor_pos {
-                        ui.label(format!("X: {:.0}, Y: {:.0}", pos.x, pos.y));
-                    }
-                });
-            });
-        });
-    }
-
-    fn render_side_panel(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::left("side_panel").show(ctx, |ui| {
-            ui.label("描画ツール");
-            if ui
-                .selectable_label(
-                    matches!(self.current_tool, DrawingTool::StrokeRect),
-                    "四角形",
-                )
-                .clicked()
-            {
-                self.current_tool = DrawingTool::StrokeRect;
-            }
-            if ui
-                .selectable_label(
-                    matches!(self.current_tool, DrawingTool::FilledRect),
-                    "塗りつぶし四角形",
-                )
-                .clicked()
-            {
-                self.current_tool = DrawingTool::FilledRect;
-            }
-            if ui
-                .selectable_label(matches!(self.current_tool, DrawingTool::Arrow), "矢印")
-                .clicked()
-            {
-                self.current_tool = DrawingTool::Arrow;
-            }
-            if ui
-                .selectable_label(matches!(self.current_tool, DrawingTool::Line), "直線")
-                .clicked()
-            {
-                self.current_tool = DrawingTool::Line;
-            }
-            ui.add_space(16.0);
-
-            let tool_type = if let Some(idx) = self.selected_item {
-                if let Some(item) = self.rectangles.get(idx) {
-                    match item {
-                        CanvasItem::StrokeRect(_) => "StrokeRect",
-                        CanvasItem::FilledRect(_) => "FilledRect",
-                        CanvasItem::Arrow(_) => "Arrow",
-                        CanvasItem::Line(_) => "Line",
-                    }
-                } else {
-                    ""
-                }
-            } else {
-                match self.current_tool {
-                    DrawingTool::StrokeRect => "StrokeRect",
-                    DrawingTool::FilledRect => "FilledRect",
-                    DrawingTool::Arrow => "Arrow",
-                    DrawingTool::Line => "Line",
-                }
-            };
-
-            if matches!(tool_type, "StrokeRect" | "Line") {
-                ui.label("線の太さ:");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.stroke_width)
-                            .range(1..=50)
-                            .suffix("px"),
-                    )
-                    .changed()
-                {
-                    self.update_selected_item();
-                }
-                ui.add_space(16.0);
-            }
-
-            if !tool_type.is_empty() {
-                ui.label("線の色:");
-                if ui.color_edit_button_srgba(&mut self.stroke_color).changed() {
-                    self.update_selected_item();
-                }
-            }
-
-            if matches!(tool_type, "FilledRect") {
-                ui.add_space(16.0);
-                ui.label("塗りつぶし色:");
-                if ui.color_edit_button_srgba(&mut self.fill_color).changed() {
-                    self.update_selected_item();
-                }
-            }
-
-            if matches!(tool_type, "StrokeRect" | "FilledRect") {
-                ui.add_space(16.0);
-                ui.label("角の丸め:");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.rounding)
-                            .range(0..=255)
-                            .suffix("px"),
-                    )
-                    .changed()
-                {
-                    self.update_selected_item();
-                }
-            }
-        });
-    }
-
-    fn render_central_panel(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(texture) = &self.image_texture.clone() {
-                let scale = self.zoom / 100.0;
-
-                egui::ScrollArea::both()
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| {
-                        // Update cursor position
-                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-
-                        let scaled_size = texture.size_vec2() * scale;
-                        let image_response =
-                            ui.allocate_response(scaled_size, egui::Sense::click_and_drag());
-                        let image_rect = image_response.rect;
-
-                        // 画像を描画
-                        ui.painter().image(
-                            texture.id(),
-                            image_rect,
-                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(1.0)),
-                            egui::Color32::WHITE,
-                        );
-
-                        // Adjust cursor position if over image
-                        if let Some(pos) = pointer_pos {
-                            if image_rect.contains(pos) {
-                                let cursor_in_image = (pos - image_rect.min) / scale;
-                                self.cursor_pos =
-                                    Some(egui::Pos2::new(cursor_in_image.x, cursor_in_image.y));
-                            }
-                        } else {
-                            self.cursor_pos = None;
-                        }
-
-                        self.handle_drawing_mode(ui, &image_response, image_rect, scale);
-                        self.render_existing_items(ui, image_rect, scale);
-                        self.render_drag_preview(ui, image_rect, scale);
-                        self.render_handles(ui, image_rect, scale);
-
-                        // Set cursor and handle selection
-                        let mut hovering_index = None;
-                        if let Some(pos) = pointer_pos {
-                            if image_rect.contains(pos) {
-                                for (i, item) in self.rectangles.iter().enumerate() {
-                                    if item.hit_test(pos, image_rect, scale) {
-                                        hovering_index = Some(i);
-                                        break;
-                                    }
-                                }
-                                if hovering_index.is_some() {
-                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
-                                } else {
-                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Default);
-                                }
-                            }
-                        }
-
-                        // Handle click for selection
-                        if image_response.clicked() {
-                            if let Some(idx) = hovering_index {
-                                self.selected_item = Some(idx);
-                                self.selected_handle = None;
-                            } else {
-                                self.selected_item = None;
-                                self.selected_handle = None;
-                            }
-                        }
-
-                        // Handle drag start for selection (in case drag starts without click)
-                        if image_response.drag_started() {
-                            if let Some(idx) = hovering_index {
-                                self.selected_item = Some(idx);
-                                self.selected_handle = None;
-                            } else {
-                                self.selected_item = None;
-                                self.selected_handle = None;
-                            }
-                        }
-
-                        // Handle dragging for selected item
-                        if let Some(selected_idx) = self.selected_item {
-                            if image_response.dragged() && self.selected_handle.is_none() {
-                                let drag_delta = image_response.drag_delta() / scale;
-                                if let Some(item) = self.rectangles.get_mut(selected_idx) {
-                                    item.translate(drag_delta);
-                                }
-                            }
-                        }
-                    });
-            }
-        });
-    }
-
     fn handle_drawing_mode(
         &mut self,
         ui: &mut egui::Ui,
@@ -390,7 +312,6 @@ impl AnnotoApp {
         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
         if let Some(pos) = pointer_pos {
             if image_rect.contains(pos) {
-                // Check if hovering over an item
                 let hovering_index = self
                     .rectangles
                     .iter()
@@ -398,246 +319,28 @@ impl AnnotoApp {
                     .find(|(_, item)| item.hit_test(pos, image_rect, scale))
                     .map(|(i, _)| i);
                 if hovering_index.is_some() {
-                    // If hovering over an item, don't start drawing
                     return;
                 }
-                match self.current_tool {
-                    _ => {
-                        if image_response.drag_started() {
-                            self.drag_start = Some(pos);
+
+                if image_response.drag_started() {
+                    self.drawing_state.drag_start = Some(pos);
+                }
+                if image_response.drag_stopped() {
+                    if let Some(start) = self.drawing_state.drag_start {
+                        let end = pos;
+                        if let Some(shape) = ShapeFactory::create_shape_from_drag(
+                            self.drawing_state.current_tool,
+                            start,
+                            end,
+                            image_rect,
+                            scale,
+                            &self.drawing_state,
+                        ) {
+                            self.rectangles.push(shape);
                         }
-                        if image_response.drag_stopped() {
-                            if let Some(start) = self.drag_start {
-                                let end = pos;
-                                match self.current_tool {
-                                    DrawingTool::StrokeRect => {
-                                        let min =
-                                            egui::pos2(start.x.min(end.x), start.y.min(end.y));
-                                        let max =
-                                            egui::pos2(start.x.max(end.x), start.y.max(end.y));
-                                        let offset_min = (min - image_rect.min) / scale;
-                                        let offset_max = (max - image_rect.min) / scale;
-                                        self.rectangles.push(CanvasItem::StrokeRect(StrokeRect {
-                                            x1: offset_min.x,
-                                            y1: offset_min.y,
-                                            x2: offset_max.x,
-                                            y2: offset_max.y,
-                                            stroke_width: self.stroke_width,
-                                            stroke_color: self.stroke_color,
-                                            rounding: self.rounding,
-                                        }));
-                                    }
-                                    DrawingTool::FilledRect => {
-                                        let min =
-                                            egui::pos2(start.x.min(end.x), start.y.min(end.y));
-                                        let max =
-                                            egui::pos2(start.x.max(end.x), start.y.max(end.y));
-                                        let offset_min = (min - image_rect.min) / scale;
-                                        let offset_max = (max - image_rect.min) / scale;
-                                        self.rectangles.push(CanvasItem::FilledRect(FilledRect {
-                                            x1: offset_min.x,
-                                            y1: offset_min.y,
-                                            x2: offset_max.x,
-                                            y2: offset_max.y,
-                                            filled_color: self.fill_color,
-                                            rounding: self.rounding,
-                                        }));
-                                    }
-                                    DrawingTool::Arrow => {
-                                        let offset_start = (start - image_rect.min) / scale;
-                                        let offset_end = (end - image_rect.min) / scale;
-                                        self.rectangles.push(CanvasItem::Arrow(Arrow {
-                                            start_x: offset_start.x,
-                                            start_y: offset_start.y,
-                                            end_x: offset_end.x,
-                                            end_y: offset_end.y,
-                                            color: self.stroke_color,
-                                        }));
-                                    }
-                                    DrawingTool::Line => {
-                                        let offset_start = (start - image_rect.min) / scale;
-                                        let offset_end = (end - image_rect.min) / scale;
-                                        self.rectangles.push(CanvasItem::Line(Line {
-                                            start_x: offset_start.x,
-                                            start_y: offset_start.y,
-                                            end_x: offset_end.x,
-                                            end_y: offset_end.y,
-                                            stroke_width: self.stroke_width,
-                                            stroke_color: self.stroke_color,
-                                        }));
-                                    }
-                                }
-                                self.drag_start = None;
-                            }
-                        }
+                        self.drawing_state.drag_start = None;
                     }
                 }
-            }
-        }
-    }
-
-    fn render_existing_items(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
-        for item in self.rectangles.iter_mut() {
-            match item {
-                CanvasItem::StrokeRect(rect) => rect.render(ui, image_rect, scale),
-                CanvasItem::FilledRect(rect) => rect.render(ui, image_rect, scale),
-                CanvasItem::Arrow(arrow) => arrow.render(ui, image_rect, scale),
-                CanvasItem::Line(line) => line.render(ui, image_rect, scale),
-            };
-        }
-    }
-
-    fn render_drag_preview(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
-        let Some(start_world) = self.drag_start else {
-            return;
-        };
-        let Some(end_world) = ui.input(|i| i.pointer.hover_pos()) else {
-            return;
-        };
-        if !image_rect.contains(end_world) {
-            return;
-        }
-
-        match self.current_tool {
-            DrawingTool::StrokeRect => {
-                let min_world = egui::pos2(
-                    start_world.x.min(end_world.x),
-                    start_world.y.min(end_world.y),
-                );
-                let max_world = egui::pos2(
-                    start_world.x.max(end_world.x),
-                    start_world.y.max(end_world.y),
-                );
-                let offset_min = (min_world - image_rect.min) / scale;
-                let offset_max = (max_world - image_rect.min) / scale;
-
-                let preview = StrokeRect {
-                    x1: offset_min.x,
-                    y1: offset_min.y,
-                    x2: offset_max.x,
-                    y2: offset_max.y,
-                    stroke_width: self.stroke_width,
-                    stroke_color: self.stroke_color,
-                    rounding: self.rounding,
-                };
-                preview.render(ui, image_rect, scale);
-            }
-            DrawingTool::FilledRect => {
-                let min_world = egui::pos2(
-                    start_world.x.min(end_world.x),
-                    start_world.y.min(end_world.y),
-                );
-                let max_world = egui::pos2(
-                    start_world.x.max(end_world.x),
-                    start_world.y.max(end_world.y),
-                );
-                let offset_min = (min_world - image_rect.min) / scale;
-                let offset_max = (max_world - image_rect.min) / scale;
-
-                let preview = FilledRect {
-                    x1: offset_min.x,
-                    y1: offset_min.y,
-                    x2: offset_max.x,
-                    y2: offset_max.y,
-                    filled_color: self.fill_color,
-                    rounding: self.rounding,
-                };
-                preview.render(ui, image_rect, scale);
-            }
-            DrawingTool::Arrow => {
-                let offset_start = (start_world - image_rect.min) / scale;
-                let offset_end = (end_world - image_rect.min) / scale;
-                let preview = Arrow {
-                    start_x: offset_start.x,
-                    start_y: offset_start.y,
-                    end_x: offset_end.x,
-                    end_y: offset_end.y,
-                    color: self.stroke_color,
-                };
-                preview.render(ui, image_rect, scale);
-            }
-            DrawingTool::Line => {
-                let offset_start = (start_world - image_rect.min) / scale;
-                let offset_end = (end_world - image_rect.min) / scale;
-                let preview = Line {
-                    start_x: offset_start.x,
-                    start_y: offset_start.y,
-                    end_x: offset_end.x,
-                    end_y: offset_end.y,
-                    stroke_width: self.stroke_width,
-                    stroke_color: self.stroke_color,
-                };
-                preview.render(ui, image_rect, scale);
-            }
-        }
-    }
-
-    fn render_handles(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, scale: f32) {
-        if let Some(selected_idx) = self.selected_item {
-            if let Some(item) = self.rectangles.get(selected_idx) {
-                let handles = item.get_handles(image_rect, scale);
-                for (pos, handle) in handles {
-                    let rect = egui::Rect::from_center_size(pos, egui::Vec2::splat(10.0));
-                    let response = ui.interact(
-                        rect,
-                        egui::Id::new(format!("handle_{:?}", handle)),
-                        egui::Sense::click_and_drag(),
-                    );
-                    ui.painter().rect_filled(rect, 0.0, egui::Color32::BLUE);
-                    if response.clicked() {
-                        self.selected_handle = Some(handle.clone());
-                    }
-                    if response.dragged() {
-                        let delta = response.drag_delta() / scale;
-                        if let Some(item) = self.rectangles.get_mut(selected_idx) {
-                            item.resize(&handle, delta);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn show_export_dialog(&mut self, ctx: &egui::Context) {
-        if self.show_export_dialog {
-            let mut open = true;
-            egui::Window::new("エクスポート")
-                .open(&mut open)
-                .show(ctx, |ui| {
-                    ui.label("出力フォーマット:");
-                    ui.horizontal(|ui| {
-                        if ui
-                            .selectable_label(self.export_format == "PNG", "PNG")
-                            .clicked()
-                        {
-                            self.export_format = "PNG".to_string();
-                        }
-                        if ui
-                            .selectable_label(self.export_format == "JPEG", "JPEG")
-                            .clicked()
-                        {
-                            self.export_format = "JPEG".to_string();
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        let can_export = self.image_bytes.is_some();
-                        if ui
-                            .add_enabled(can_export, egui::Button::new("エクスポート"))
-                            .clicked()
-                        {
-                            self.export_image();
-                            self.show_export_dialog = false;
-                        }
-                        if ui.button("キャンセル").clicked() {
-                            self.show_export_dialog = false;
-                        }
-                    });
-                    if self.image_bytes.is_none() {
-                        ui.label("画像をロードしてください。");
-                    }
-                });
-            if !open {
-                self.show_export_dialog = false;
             }
         }
     }
@@ -645,134 +348,71 @@ impl AnnotoApp {
     fn export_image(&self) {
         web_sys::console::log_1(&"Exporting image".into());
         if let Some(image_bytes) = &self.image_bytes {
-            if let Ok(img) = image::load_from_memory(image_bytes) {
-                let rgba_img = img.to_rgba8();
-                let width = rgba_img.width() as u32;
-                let height = rgba_img.height() as u32;
-                let mut pixmap = tiny_skia::Pixmap::new(width, height).unwrap();
-                // Copy image data
-                for (i, pixel) in rgba_img.pixels().enumerate() {
-                    let color =
-                        tiny_skia::Color::from_rgba8(pixel[0], pixel[1], pixel[2], pixel[3]);
-                    pixmap.pixels_mut()[i] = color.premultiply().to_color_u8();
-                }
-                // Draw shapes on the pixmap
-                for item in &self.rectangles {
-                    match item {
-                        CanvasItem::StrokeRect(rect) => rect.draw_on_pixmap(&mut pixmap),
-                        CanvasItem::FilledRect(rect) => rect.draw_on_pixmap(&mut pixmap),
-                        CanvasItem::Arrow(arrow) => arrow.draw_on_pixmap(&mut pixmap),
-                        CanvasItem::Line(line) => line.draw_on_pixmap(&mut pixmap),
-                    }
-                }
-                // Convert pixmap to RgbaImage
-                let mut rgba_img = image::RgbaImage::new(width, height);
-                for (i, pixel) in pixmap.pixels().iter().enumerate() {
-                    let x = (i % width as usize) as u32;
-                    let y = (i / width as usize) as u32;
-                    let color = tiny_skia::Color::from_rgba8(
-                        pixel.red(),
-                        pixel.green(),
-                        pixel.blue(),
-                        pixel.alpha(),
-                    );
-                    rgba_img.put_pixel(
-                        x,
-                        y,
-                        image::Rgba([
-                            (color.red() * 255.0) as u8,
-                            (color.green() * 255.0) as u8,
-                            (color.blue() * 255.0) as u8,
-                            (color.alpha() * 255.0) as u8,
-                        ]),
+            match ImageExporter::export_image(
+                image_bytes,
+                &self.rectangles,
+                &self.ui_state.export_format,
+            ) {
+                Ok(data) => {
+                    DownloadHandler::download_image(
+                        &data,
+                        &self.ui_state.export_format.to_lowercase(),
                     );
                 }
-                // Encode and download
-                let data = match self.export_format.as_str() {
-                    "PNG" => {
-                        let mut buffer = Vec::new();
-                        rgba_img
-                            .write_to(
-                                &mut std::io::Cursor::new(&mut buffer),
-                                image::ImageFormat::Png,
-                            )
-                            .unwrap();
-                        buffer
-                    }
-                    "JPEG" => {
-                        let mut buffer = Vec::new();
-                        rgba_img
-                            .write_to(
-                                &mut std::io::Cursor::new(&mut buffer),
-                                image::ImageFormat::Jpeg,
-                            )
-                            .unwrap();
-                        buffer
-                    }
-                    _ => return,
-                };
-                web_sys::console::log_1(&format!("Data length: {}", data.len()).into());
-                self.download_image(&data, &self.export_format.to_lowercase());
-            } else {
-                web_sys::console::log_1(&"Failed to load image".into());
+                Err(e) => {
+                    web_sys::console::log_1(&format!("Export error: {}", e).into());
+                }
             }
         } else {
             web_sys::console::log_1(&"No image bytes".into());
         }
     }
 
-    fn download_image(&self, data: &[u8], format: &str) {
-        web_sys::console::log_1(&"Creating blob".into());
-        let bag = web_sys::BlobPropertyBag::new();
-        bag.set_type(&format!("image/{}", format));
-        let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(
-            &js_sys::Array::of1(&js_sys::Uint8Array::from(data)),
-            &bag,
-        )
-        .unwrap();
-        let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
-        web_sys::console::log_1(&format!("Blob URL: {}", url).into());
-        let document = web_sys::window().unwrap().document().unwrap();
-        let a = document
-            .create_element("a")
-            .unwrap()
-            .dyn_into::<web_sys::HtmlElement>()
-            .unwrap();
-        a.set_attribute("href", &url).unwrap();
-        a.set_attribute("download", &format!("exported.{}", format))
-            .unwrap();
-        a.click();
-        web_sys::Url::revoke_object_url(&url).unwrap();
-        web_sys::console::log_1(&"Download initiated".into());
-    }
-
     fn sync_ui_from_selection(&mut self) {
-        if let Some(idx) = self.selected_item {
+        if let Some(idx) = self.selection_state.selected_item {
             if let Some(item) = self.rectangles.get(idx) {
                 if let Some(w) = item.get_stroke_width() {
-                    self.stroke_width = w;
+                    self.drawing_state.stroke_width = w;
                 }
                 if let Some(c) = item.get_stroke_color() {
-                    self.stroke_color = c;
+                    self.drawing_state.stroke_color = c;
                 }
                 if let Some(c) = item.get_fill_color() {
-                    self.fill_color = c;
+                    self.drawing_state.fill_color = c;
                 }
                 if let Some(r) = item.get_rounding() {
-                    self.rounding = r;
+                    self.drawing_state.rounding = r;
+                }
+                if let CanvasItem::Mosaic(mosaic) = item {
+                    self.drawing_state.mosaic_granularity = mosaic.get_granularity();
                 }
             }
         }
     }
 
     fn update_selected_item(&mut self) {
-        if let Some(idx) = self.selected_item {
+        if let Some(idx) = self.selection_state.selected_item {
             if let Some(item) = self.rectangles.get_mut(idx) {
-                item.set_stroke_width(self.stroke_width);
-                item.set_stroke_color(self.stroke_color);
-                item.set_fill_color(self.fill_color);
-                item.set_rounding(self.rounding);
+                item.set_stroke_width(self.drawing_state.stroke_width);
+                item.set_stroke_color(self.drawing_state.stroke_color);
+                item.set_fill_color(self.drawing_state.fill_color);
+                item.set_rounding(self.drawing_state.rounding);
             }
         }
+    }
+
+    fn handle_keyboard_events(&mut self, ctx: &egui::Context) {
+        if self.ui_state.mode != AppMode::Drawing {
+            return;
+        }
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
+                if let Some(idx) = self.selection_state.selected_item {
+                    self.rectangles.remove(idx);
+                    self.selection_state.selected_item = None;
+                    self.selection_state.selected_handle = None;
+                }
+            }
+        });
     }
 }

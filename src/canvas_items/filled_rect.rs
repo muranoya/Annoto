@@ -56,6 +56,37 @@ impl FilledRect {
         self.y2 += delta.y;
     }
 
+    pub fn resize(&mut self, handle: &crate::canvas_items::Handle, delta: egui::Vec2) {
+        match handle {
+            crate::canvas_items::Handle::Corner(index) => {
+                match *index {
+                    0 => {
+                        // top-left
+                        self.x1 += delta.x;
+                        self.y1 += delta.y;
+                    }
+                    1 => {
+                        // top-right
+                        self.x2 += delta.x;
+                        self.y1 += delta.y;
+                    }
+                    2 => {
+                        // bottom-left
+                        self.x1 += delta.x;
+                        self.y2 += delta.y;
+                    }
+                    3 => {
+                        // bottom-right
+                        self.x2 += delta.x;
+                        self.y2 += delta.y;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn get_handles(
         &self,
         image_rect: egui::Rect,
@@ -87,28 +118,6 @@ impl FilledRect {
         ));
         handles.push((world_max, crate::canvas_items::Handle::Corner(3)));
         handles
-    }
-
-    pub fn resize(&mut self, handle: &crate::canvas_items::Handle, delta: egui::Vec2) {
-        match handle {
-            crate::canvas_items::Handle::Corner(0) => {
-                self.x1 += delta.x;
-                self.y1 += delta.y;
-            }
-            crate::canvas_items::Handle::Corner(1) => {
-                self.x2 += delta.x;
-                self.y1 += delta.y;
-            }
-            crate::canvas_items::Handle::Corner(2) => {
-                self.x1 += delta.x;
-                self.y2 += delta.y;
-            }
-            crate::canvas_items::Handle::Corner(3) => {
-                self.x2 += delta.x;
-                self.y2 += delta.y;
-            }
-            _ => {}
-        }
     }
 
     pub fn draw_on_pixmap(&self, pixmap: &mut tiny_skia::Pixmap) {
