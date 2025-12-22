@@ -95,6 +95,20 @@ impl Arrow {
         self.end_y += delta.y;
     }
 
+    pub fn resize(&mut self, handle: &crate::canvas_items::Handle, delta: egui::Vec2) {
+        match handle {
+            crate::canvas_items::Handle::Start => {
+                self.start_x += delta.x;
+                self.start_y += delta.y;
+            }
+            crate::canvas_items::Handle::End => {
+                self.end_x += delta.x;
+                self.end_y += delta.y;
+            }
+            _ => {}
+        }
+    }
+
     pub fn get_handles(
         &self,
         image_rect: egui::Rect,

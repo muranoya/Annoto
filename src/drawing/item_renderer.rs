@@ -26,24 +26,30 @@ impl ItemRenderer {
     pub fn render_handles(
         ui: &mut egui::Ui,
         selected_item: Option<usize>,
-        rectangles: &[CanvasItem],
+        selected_handle: &mut Option<crate::canvas_items::Handle>,
+        rectangles: &mut [CanvasItem],
         image_rect: egui::Rect,
         scale: f32,
-        mut on_handle_drag: impl FnMut(usize),
     ) {
         if let Some(selected_idx) = selected_item {
             if let Some(item) = rectangles.get(selected_idx) {
                 let handles = item.get_handles(image_rect, scale);
-                for (pos, handle) in handles {
+                for (i, (pos, handle)) in handles.into_iter().enumerate() {
                     let rect = egui::Rect::from_center_size(pos, egui::Vec2::splat(10.0));
                     let response = ui.interact(
                         rect,
-                        egui::Id::new(format!("handle_{:?}", handle)),
+                        egui::Id::new(format!("handle_{}_{}_{:?}", selected_idx, i, handle)),
                         egui::Sense::click_and_drag(),
                     );
                     ui.painter().rect_filled(rect, 0.0, egui::Color32::BLUE);
+                    if response.clicked() {
+                        *selected_handle = Some(handle.clone());
+                    }
                     if response.dragged() {
-                        on_handle_drag(selected_idx);
+                        let delta = response.drag_delta() / scale;
+                        if let Some(item_mut) = rectangles.get_mut(selected_idx) {
+                            item_mut.resize(&handle, delta);
+                        }
                     }
                 }
             }

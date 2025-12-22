@@ -12,7 +12,7 @@ pub use stroke_rect::StrokeRect;
 
 #[derive(Clone, Debug)]
 pub enum Handle {
-    Corner,
+    Corner(usize),
     Start,
     End,
 }
@@ -44,6 +44,16 @@ impl CanvasItem {
             CanvasItem::Arrow(item) => item.translate(delta),
             CanvasItem::Line(item) => item.translate(delta),
             CanvasItem::Mosaic(item) => item.translate(delta),
+        }
+    }
+
+    pub fn resize(&mut self, handle: &Handle, delta: egui::Vec2) {
+        match self {
+            CanvasItem::StrokeRect(item) => item.resize(handle, delta),
+            CanvasItem::FilledRect(item) => item.resize(handle, delta),
+            CanvasItem::Arrow(item) => item.resize(handle, delta),
+            CanvasItem::Line(item) => item.resize(handle, delta),
+            CanvasItem::Mosaic(item) => item.resize(handle, delta),
         }
     }
 

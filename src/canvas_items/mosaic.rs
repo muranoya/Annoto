@@ -64,6 +64,33 @@ impl Mosaic {
         self.y2 += delta.y;
     }
 
+    pub fn resize(&mut self, handle: &crate::canvas_items::Handle, delta: egui::Vec2) {
+        match handle {
+            crate::canvas_items::Handle::Corner(index) => {
+                match *index {
+                    0 => { // top-left
+                        self.x1 += delta.x;
+                        self.y1 += delta.y;
+                    }
+                    1 => { // top-right
+                        self.x2 += delta.x;
+                        self.y1 += delta.y;
+                    }
+                    2 => { // bottom-left
+                        self.x1 += delta.x;
+                        self.y2 += delta.y;
+                    }
+                    3 => { // bottom-right
+                        self.x2 += delta.x;
+                        self.y2 += delta.y;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn get_handles(
         &self,
         image_rect: egui::Rect,
@@ -84,16 +111,16 @@ impl Mosaic {
             }
             .to_vec2()
                 * scale;
-        handles.push((world_min, crate::canvas_items::Handle::Corner));
+        handles.push((world_min, crate::canvas_items::Handle::Corner(0)));
         handles.push((
             egui::Pos2::new(world_max.x, world_min.y),
-            crate::canvas_items::Handle::Corner,
+            crate::canvas_items::Handle::Corner(1),
         ));
         handles.push((
             egui::Pos2::new(world_min.x, world_max.y),
-            crate::canvas_items::Handle::Corner,
+            crate::canvas_items::Handle::Corner(2),
         ));
-        handles.push((world_max, crate::canvas_items::Handle::Corner));
+        handles.push((world_max, crate::canvas_items::Handle::Corner(3)));
         handles
     }
 

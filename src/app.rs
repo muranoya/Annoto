@@ -59,7 +59,7 @@ impl AnnotoApp {
             .families
             .get_mut(&FontFamily::Monospace)
             .unwrap()
-            .push("my_font".to_owned());
+            .push("NotoSansRegular".to_owned());
         ctx.set_fonts(fonts);
     }
 
@@ -201,10 +201,10 @@ impl AnnotoApp {
                             ItemRenderer::render_handles(
                                 ui,
                                 self.selection_state.selected_item,
-                                &self.rectangles,
+                                &mut self.selection_state.selected_handle,
+                                &mut self.rectangles,
                                 image_rect,
                                 scale,
-                                |_| {},
                             );
 
                             let mut hovering_index = None;
