@@ -4,14 +4,19 @@ mod drawing;
 mod drawing_tool;
 mod export;
 mod state;
+mod touch_handler;
 mod ui;
 use crate::app::AnnotoApp;
+use crate::touch_handler::init_touch_handlers;
 use eframe::wasm_bindgen::JsCast as _;
 
 fn main() {
     console_error_panic_hook::set_once();
     // Redirect `log` message to `console.log` and friends:
     eframe::WebLogger::init(log::LevelFilter::Debug).ok();
+
+    // タッチイベントハンドラーを初期化
+    init_touch_handlers();
 
     let web_options = eframe::WebOptions::default();
 

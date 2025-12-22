@@ -15,7 +15,6 @@ pub enum Handle {
     Corner(usize),
     Start,
     End,
-    Delete,
 }
 
 #[derive(Clone)]
@@ -131,6 +130,50 @@ impl CanvasItem {
             CanvasItem::StrokeRect(item) => item.rounding = rounding,
             CanvasItem::FilledRect(item) => item.rounding = rounding,
             _ => {}
+        }
+    }
+
+    pub fn scale(&self, factor: f32) -> CanvasItem {
+        match self {
+            CanvasItem::StrokeRect(item) => CanvasItem::StrokeRect(StrokeRect {
+                x1: item.x1 * factor,
+                y1: item.y1 * factor,
+                x2: item.x2 * factor,
+                y2: item.y2 * factor,
+                stroke_width: item.stroke_width * factor,
+                stroke_color: item.stroke_color,
+                rounding: item.rounding,
+            }),
+            CanvasItem::FilledRect(item) => CanvasItem::FilledRect(FilledRect {
+                x1: item.x1 * factor,
+                y1: item.y1 * factor,
+                x2: item.x2 * factor,
+                y2: item.y2 * factor,
+                filled_color: item.filled_color,
+                rounding: item.rounding,
+            }),
+            CanvasItem::Arrow(item) => CanvasItem::Arrow(Arrow {
+                start_x: item.start_x * factor,
+                start_y: item.start_y * factor,
+                end_x: item.end_x * factor,
+                end_y: item.end_y * factor,
+                color: item.color,
+            }),
+            CanvasItem::Line(item) => CanvasItem::Line(Line {
+                start_x: item.start_x * factor,
+                start_y: item.start_y * factor,
+                end_x: item.end_x * factor,
+                end_y: item.end_y * factor,
+                stroke_width: item.stroke_width * factor,
+                stroke_color: item.stroke_color,
+            }),
+            CanvasItem::Mosaic(item) => CanvasItem::Mosaic(Mosaic {
+                x1: item.x1 * factor,
+                y1: item.y1 * factor,
+                x2: item.x2 * factor,
+                y2: item.y2 * factor,
+                granularity: item.granularity,
+            }),
         }
     }
 }

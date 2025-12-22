@@ -1,7 +1,8 @@
 use crate::canvas_items::*;
 use crate::drawing::{ItemRenderer, PreviewRenderer, ShapeFactory};
 use crate::export::{DownloadHandler, ImageExporter};
-use crate::state::{AppMode, DrawingState, SelectionState, UiState};
+use crate::state::{DrawingState, SelectionState, UiState};
+use crate::touch_handler::get_current_touches;
 use crate::ui;
 use egui::{FontData, FontDefinitions, FontFamily};
 use js_sys;
@@ -163,9 +164,8 @@ impl AnnotoApp {
                             ui.allocate_response(scaled_size, egui::Sense::click_and_drag());
                         let mut image_rect = image_response.rect;
 
-                        if self.ui_state.mode == AppMode::View {
-                            image_rect = image_rect.translate(self.ui_state.pan_offset);
-                        }
+                        // パンオフセットを適用（View モードと Drawing モード両方で）
+                        image_rect = image_rect.translate(self.ui_state.pan_offset);
 
                         ui.painter().image(
                             texture.id(),
@@ -184,103 +184,84 @@ impl AnnotoApp {
                             self.ui_state.cursor_pos = None;
                         }
 
-                        if self.ui_state.mode == AppMode::Drawing {
-                            self.handle_drawing_mode(ui, &image_response, image_rect, scale);
-                            ItemRenderer::render_existing_items(
-                                ui,
-                                &mut self.rectangles,
-                                image_rect,
-                                scale,
-                            );
-                            PreviewRenderer::render_drag_preview(
-                                ui,
-                                &self.drawing_state,
-                                image_rect,
-                                scale,
-                            );
-                            let should_delete = ItemRenderer::render_handles(
-                                ui,
-                                self.selection_state.selected_item,
-                                &mut self.selection_state.selected_handle,
-                                &mut self.rectangles,
-                                image_rect,
-                                scale,
-                            );
+                        // タッチイベント処理
+                        self.handle_touch_events(image_rect, scale);
 
-                            if should_delete {
-                                if let Some(idx) = self.selection_state.selected_item {
-                                    self.rectangles.remove(idx);
-                                    self.selection_state.selected_item = None;
-                                    self.selection_state.selected_handle = None;
-                                }
+                        self.handle_drawing_mode(ui, &image_response, image_rect, scale);
+                        ItemRenderer::render_existing_items(
+                            ui,
+                            &mut self.rectangles,
+                            image_rect,
+                            scale,
+                        );
+                        PreviewRenderer::render_drag_preview(
+                            ui,
+                            &self.drawing_state,
+                            image_rect,
+                            scale,
+                        );
+                        let should_delete = ItemRenderer::render_handles(
+                            ui,
+                            self.selection_state.selected_item,
+                            &mut self.selection_state.selected_handle,
+                            &mut self.rectangles,
+                            image_rect,
+                            scale,
+                        );
+
+                        if should_delete {
+                            if let Some(idx) = self.selection_state.selected_item {
+                                self.rectangles.remove(idx);
+                                self.selection_state.selected_item = None;
+                                self.selection_state.selected_handle = None;
                             }
+                        }
 
-                            let mut hovering_index = None;
-                            if let Some(pos) = pointer_pos {
-                                if image_rect.contains(pos) {
-                                    for (i, item) in self.rectangles.iter().enumerate() {
-                                        if item.hit_test(pos, image_rect, scale) {
-                                            hovering_index = Some(i);
-                                            break;
-                                        }
-                                    }
-                                    if hovering_index.is_some() {
-                                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
-                                    } else {
-                                        ui.output_mut(|o| {
-                                            o.cursor_icon = egui::CursorIcon::Default
-                                        });
+                        let mut hovering_index = None;
+                        if let Some(pos) = pointer_pos {
+                            if image_rect.contains(pos) {
+                                for (i, item) in self.rectangles.iter().enumerate() {
+                                    if item.hit_test(pos, image_rect, scale) {
+                                        hovering_index = Some(i);
+                                        break;
                                     }
                                 }
-                            }
-
-                            if image_response.clicked() {
-                                if let Some(idx) = hovering_index {
-                                    self.selection_state.selected_item = Some(idx);
-                                    self.selection_state.selected_handle = None;
+                                if hovering_index.is_some() {
+                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
                                 } else {
-                                    self.selection_state.selected_item = None;
-                                    self.selection_state.selected_handle = None;
+                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Default);
                                 }
                             }
+                        }
 
-                            if image_response.drag_started() {
-                                if let Some(idx) = hovering_index {
-                                    self.selection_state.selected_item = Some(idx);
-                                    self.selection_state.selected_handle = None;
-                                } else {
-                                    self.selection_state.selected_item = None;
-                                    self.selection_state.selected_handle = None;
+                        if image_response.clicked() {
+                            if let Some(idx) = hovering_index {
+                                self.selection_state.selected_item = Some(idx);
+                                self.selection_state.selected_handle = None;
+                            } else {
+                                self.selection_state.selected_item = None;
+                                self.selection_state.selected_handle = None;
+                            }
+                        }
+
+                        if image_response.drag_started() {
+                            if let Some(idx) = hovering_index {
+                                self.selection_state.selected_item = Some(idx);
+                                self.selection_state.selected_handle = None;
+                            } else {
+                                self.selection_state.selected_item = None;
+                                self.selection_state.selected_handle = None;
+                            }
+                        }
+
+                        if let Some(selected_idx) = self.selection_state.selected_item {
+                            if image_response.dragged()
+                                && self.selection_state.selected_handle.is_none()
+                            {
+                                let drag_delta = image_response.drag_delta() / scale;
+                                if let Some(item) = self.rectangles.get_mut(selected_idx) {
+                                    item.translate(drag_delta);
                                 }
-                            }
-
-                            if let Some(selected_idx) = self.selection_state.selected_item {
-                                if image_response.dragged()
-                                    && self.selection_state.selected_handle.is_none()
-                                {
-                                    let drag_delta = image_response.drag_delta() / scale;
-                                    if let Some(item) = self.rectangles.get_mut(selected_idx) {
-                                        item.translate(drag_delta);
-                                    }
-                                }
-                            }
-                        } else {
-                            ItemRenderer::render_existing_items(
-                                ui,
-                                &mut self.rectangles,
-                                image_rect,
-                                scale,
-                            );
-
-                            if image_response.dragged() {
-                                self.ui_state.pan_offset += image_response.drag_delta();
-                            }
-
-                            let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
-                            if scroll_delta != 0.0 {
-                                let zoom_factor = if scroll_delta > 0.0 { 1.1 } else { 0.9 };
-                                self.drawing_state.zoom =
-                                    (self.drawing_state.zoom * zoom_factor).clamp(1.0, 500.0);
                             }
                         }
                     });
@@ -310,6 +291,12 @@ impl AnnotoApp {
         scale: f32,
     ) {
         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+
+        // マルチタッチ中は描画処理をスキップ
+        if self.ui_state.touch_points.len() >= 2 {
+            return;
+        }
+
         if let Some(pos) = pointer_pos {
             if image_rect.contains(pos) {
                 let hovering_index = self
@@ -348,10 +335,13 @@ impl AnnotoApp {
     fn export_image(&self) {
         web_sys::console::log_1(&"Exporting image".into());
         if let Some(image_bytes) = &self.image_bytes {
-            match ImageExporter::export_image(
+            match ImageExporter::export_image_with_resize(
                 image_bytes,
                 &self.rectangles,
                 &self.ui_state.export_format,
+                self.ui_state.export_resize_mode,
+                self.ui_state.export_resize_percentage,
+                self.ui_state.export_resize_pixels,
             ) {
                 Ok(data) => {
                     DownloadHandler::download_image(
@@ -402,9 +392,6 @@ impl AnnotoApp {
     }
 
     fn handle_keyboard_events(&mut self, ctx: &egui::Context) {
-        if self.ui_state.mode != AppMode::Drawing {
-            return;
-        }
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
                 if let Some(idx) = self.selection_state.selected_item {
@@ -414,5 +401,112 @@ impl AnnotoApp {
                 }
             }
         });
+    }
+
+    fn handle_touch_events(&mut self, image_rect: egui::Rect, scale: f32) {
+        // タッチポイントを更新（touch_handler から取得）
+        self.ui_state.prev_touch_points = self.ui_state.touch_points.clone();
+        self.ui_state.touch_points = get_current_touches();
+
+        // 2本指以上のタッチがある場合
+        if self.ui_state.touch_points.len() >= 2 {
+            // 前フレームでも2本指以上あった場合
+            if self.ui_state.prev_touch_points.len() >= 2 {
+                // 2本指の移動距離を計算してパンニングとピンチズームを判定
+                let curr_p1 = self.ui_state.touch_points[0].pos;
+                let curr_p2 = self.ui_state.touch_points[1].pos;
+                let prev_p1 = self.ui_state.prev_touch_points[0].pos;
+                let prev_p2 = self.ui_state.prev_touch_points[1].pos;
+
+                let curr_distance = (curr_p2 - curr_p1).length();
+                let prev_distance = (prev_p2 - prev_p1).length();
+
+                // 距離の変化が大きい場合はピンチズーム
+                let distance_change = (curr_distance - prev_distance).abs();
+                if distance_change > 3.0 {
+                    self.handle_pinch_zoom(image_rect, scale);
+                } else {
+                    // 距離の変化が小さい場合はパンニング
+                    self.handle_two_finger_pan();
+                }
+            }
+        }
+    }
+
+    fn handle_two_finger_pan(&mut self) {
+        let curr_points = &self.ui_state.touch_points;
+        let prev_points = &self.ui_state.prev_touch_points;
+
+        if curr_points.len() < 2 || prev_points.len() < 2 {
+            return;
+        }
+
+        // 2本指の中点を計算
+        let curr_center = egui::Pos2::new(
+            (curr_points[0].pos.x + curr_points[1].pos.x) / 2.0,
+            (curr_points[0].pos.y + curr_points[1].pos.y) / 2.0,
+        );
+
+        let prev_center = egui::Pos2::new(
+            (prev_points[0].pos.x + prev_points[1].pos.x) / 2.0,
+            (prev_points[0].pos.y + prev_points[1].pos.y) / 2.0,
+        );
+
+        // 中点の移動量を計算
+        let pan_delta = curr_center - prev_center;
+
+        // パンオフセットを更新
+        self.ui_state.pan_offset += pan_delta;
+    }
+
+    fn handle_pinch_zoom(&mut self, image_rect: egui::Rect, scale: f32) {
+        let curr_points = &self.ui_state.touch_points;
+        let prev_points = &self.ui_state.prev_touch_points;
+
+        if curr_points.len() < 2 || prev_points.len() < 2 {
+            return;
+        }
+
+        // 現在の2本指の距離を計算
+        let curr_p1 = curr_points[0].pos;
+        let curr_p2 = curr_points[1].pos;
+        let curr_distance = (curr_p2 - curr_p1).length();
+
+        // 前フレームの2本指の距離を計算
+        let prev_p1 = prev_points[0].pos;
+        let prev_p2 = prev_points[1].pos;
+        let prev_distance = (prev_p2 - prev_p1).length();
+
+        if prev_distance < 1.0 {
+            return;
+        }
+
+        // ピンチの中点を計算（現在）
+        let curr_center =
+            egui::Pos2::new((curr_p1.x + curr_p2.x) / 2.0, (curr_p1.y + curr_p2.y) / 2.0);
+
+        // ズーム比率を計算
+        let zoom_ratio = curr_distance / prev_distance;
+
+        // 新しいズーム値を計算
+        let new_zoom = (self.drawing_state.zoom * zoom_ratio).clamp(1.0, 500.0);
+
+        // ピンチ中心がスクリーン上のどこにあるかを計算
+        // 画像座標系でのピンチ中心
+        if image_rect.contains(curr_center) {
+            // ピンチ中心のスクリーン座標から画像座標への変換
+            let pinch_screen_offset = curr_center - image_rect.min;
+            let pinch_image_pos = pinch_screen_offset / scale;
+
+            // ズーム前後での画像座標の変化を計算
+            let zoom_change = new_zoom / self.drawing_state.zoom;
+
+            // パンオフセットを調整して、ピンチ中心が固定されるようにする
+            // ピンチ中心が画面上の同じ位置に留まるようにオフセットを調整
+            let offset_adjustment = pinch_image_pos * (1.0 - zoom_change) * scale;
+            self.ui_state.pan_offset += offset_adjustment;
+
+            self.drawing_state.zoom = new_zoom;
+        }
     }
 }

@@ -115,7 +115,7 @@ pub fn render_side_panel(
             ui.add_space(16.0);
         }
 
-        if !tool_type.is_empty() {
+        if matches!(tool_type, "StrokeRect" | "Arrow" | "Line" | "FilledRect") {
             ui.label("線の色:");
             if ui
                 .color_edit_button_srgba(&mut drawing_state.stroke_color)
