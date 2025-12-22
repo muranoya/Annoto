@@ -120,20 +120,6 @@ impl Arrow {
         handles
     }
 
-    pub fn resize(&mut self, handle: &crate::canvas_items::Handle, delta: egui::Vec2) {
-        match handle {
-            crate::canvas_items::Handle::Start => {
-                self.start_x += delta.x;
-                self.start_y += delta.y;
-            }
-            crate::canvas_items::Handle::End => {
-                self.end_x += delta.x;
-                self.end_y += delta.y;
-            }
-            _ => {}
-        }
-    }
-
     fn point_to_line_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
         let ab = b - a;
         let ap = p - a;

@@ -82,39 +82,17 @@ impl StrokeRect {
             }
             .to_vec2()
                 * scale;
-        handles.push((world_min, crate::canvas_items::Handle::Corner(0)));
+        handles.push((world_min, crate::canvas_items::Handle::Corner));
         handles.push((
             egui::Pos2::new(world_max.x, world_min.y),
-            crate::canvas_items::Handle::Corner(1),
+            crate::canvas_items::Handle::Corner,
         ));
         handles.push((
             egui::Pos2::new(world_min.x, world_max.y),
-            crate::canvas_items::Handle::Corner(2),
+            crate::canvas_items::Handle::Corner,
         ));
-        handles.push((world_max, crate::canvas_items::Handle::Corner(3)));
+        handles.push((world_max, crate::canvas_items::Handle::Corner));
         handles
-    }
-
-    pub fn resize(&mut self, handle: &crate::canvas_items::Handle, delta: egui::Vec2) {
-        match handle {
-            crate::canvas_items::Handle::Corner(0) => {
-                self.x1 += delta.x;
-                self.y1 += delta.y;
-            }
-            crate::canvas_items::Handle::Corner(1) => {
-                self.x2 += delta.x;
-                self.y1 += delta.y;
-            }
-            crate::canvas_items::Handle::Corner(2) => {
-                self.x1 += delta.x;
-                self.y2 += delta.y;
-            }
-            crate::canvas_items::Handle::Corner(3) => {
-                self.x2 += delta.x;
-                self.y2 += delta.y;
-            }
-            _ => {}
-        }
     }
 
     pub fn draw_on_pixmap(&self, pixmap: &mut tiny_skia::Pixmap) {

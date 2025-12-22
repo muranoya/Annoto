@@ -1,18 +1,18 @@
 pub mod arrow;
 pub mod filled_rect;
 pub mod line;
-pub mod stroke_rect;
 pub mod mosaic;
+pub mod stroke_rect;
 
 pub use arrow::Arrow;
 pub use filled_rect::FilledRect;
 pub use line::Line;
-pub use stroke_rect::StrokeRect;
 pub use mosaic::Mosaic;
+pub use stroke_rect::StrokeRect;
 
 #[derive(Clone, Debug)]
 pub enum Handle {
-    Corner(usize), // 0: top-left, 1: top-right, 2: bottom-left, 3: bottom-right
+    Corner,
     Start,
     End,
 }
@@ -54,16 +54,6 @@ impl CanvasItem {
             CanvasItem::Arrow(item) => item.get_handles(image_rect, scale),
             CanvasItem::Line(item) => item.get_handles(image_rect, scale),
             CanvasItem::Mosaic(item) => item.get_handles(image_rect, scale),
-        }
-    }
-
-    pub fn resize(&mut self, handle: &Handle, delta: egui::Vec2) {
-        match self {
-            CanvasItem::StrokeRect(item) => item.resize(handle, delta),
-            CanvasItem::FilledRect(item) => item.resize(handle, delta),
-            CanvasItem::Arrow(item) => item.resize(handle, delta),
-            CanvasItem::Line(item) => item.resize(handle, delta),
-            CanvasItem::Mosaic(item) => item.resize(handle, delta),
         }
     }
 
