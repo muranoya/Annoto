@@ -31,6 +31,7 @@ pub struct AnnotoApp {
     stroke_color: egui::Color32,
     fill_color: egui::Color32,
     rounding: u8,
+    mosaic_granularity: u8,
     current_tool: DrawingTool,
 
     // Cursor position
@@ -69,6 +70,7 @@ impl Default for AnnotoApp {
             stroke_color: egui::Color32::RED,
             fill_color: egui::Color32::from_rgba_premultiplied(255, 0, 0, 128),
             rounding: 0,
+            mosaic_granularity: 10,
             current_tool: DrawingTool::StrokeRect,
             cursor_pos: None,
             selected_item: None,
@@ -257,6 +259,12 @@ impl AnnotoApp {
             {
                 self.current_tool = DrawingTool::Line;
             }
+            if ui
+                .selectable_label(matches!(self.current_tool, DrawingTool::Mosaic), "モザイク")
+                .clicked()
+            {
+                self.current_tool = DrawingTool::Mosaic;
+            }
             ui.add_space(16.0);
 
             let tool_type = if let Some(idx) = self.selected_item {
@@ -266,6 +274,7 @@ impl AnnotoApp {
                         CanvasItem::FilledRect(_) => "FilledRect",
                         CanvasItem::Arrow(_) => "Arrow",
                         CanvasItem::Line(_) => "Line",
+                        CanvasItem::Mosaic(_) => "Mosaic",
                     }
                 } else {
                     ""
@@ -276,6 +285,7 @@ impl AnnotoApp {
                     DrawingTool::FilledRect => "FilledRect",
                     DrawingTool::Arrow => "Arrow",
                     DrawingTool::Line => "Line",
+                    DrawingTool::Mosaic => "Mosaic",
                 }
             };
 
@@ -285,6 +295,21 @@ impl AnnotoApp {
                     .add(
                         egui::DragValue::new(&mut self.stroke_width)
                             .range(1..=50)
+                            .suffix("px"),
+                    )
+                    .changed()
+                {
+                    self.update_selected_item();
+                }
+                ui.add_space(16.0);
+            }
+
+            if matches!(tool_type, "Mosaic") {
+                ui.label("モザイク粒度:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.mosaic_granularity)
+                            .range(1..=100)
                             .suffix("px"),
                     )
                     .changed()
@@ -533,6 +558,21 @@ impl AnnotoApp {
                                             stroke_color: self.stroke_color,
                                         }));
                                     }
+                                    DrawingTool::Mosaic => {
+                                        let min =
+                                            egui::pos2(start.x.min(end.x), start.y.min(end.y));
+                                        let max =
+                                            egui::pos2(start.x.max(end.x), start.y.max(end.y));
+                                        let offset_min = (min - image_rect.min) / scale;
+                                        let offset_max = (max - image_rect.min) / scale;
+                                        self.rectangles.push(CanvasItem::Mosaic(Mosaic {
+                                            x1: offset_min.x,
+                                            y1: offset_min.y,
+                                            x2: offset_max.x,
+                                            y2: offset_max.y,
+                                            granularity: self.mosaic_granularity,
+                                        }));
+                                    }
                                 }
                                 self.drag_start = None;
                             }
@@ -550,6 +590,7 @@ impl AnnotoApp {
                 CanvasItem::FilledRect(rect) => rect.render(ui, image_rect, scale),
                 CanvasItem::Arrow(arrow) => arrow.render(ui, image_rect, scale),
                 CanvasItem::Line(line) => line.render(ui, image_rect, scale),
+                CanvasItem::Mosaic(mosaic) => mosaic.render(ui, image_rect, scale),
             };
         }
     }
@@ -633,6 +674,27 @@ impl AnnotoApp {
                     end_y: offset_end.y,
                     stroke_width: self.stroke_width,
                     stroke_color: self.stroke_color,
+                };
+                preview.render(ui, image_rect, scale);
+            }
+            DrawingTool::Mosaic => {
+                let min_world = egui::pos2(
+                    start_world.x.min(end_world.x),
+                    start_world.y.min(end_world.y),
+                );
+                let max_world = egui::pos2(
+                    start_world.x.max(end_world.x),
+                    start_world.y.max(end_world.y),
+                );
+                let offset_min = (min_world - image_rect.min) / scale;
+                let offset_max = (max_world - image_rect.min) / scale;
+
+                let preview = Mosaic {
+                    x1: offset_min.x,
+                    y1: offset_min.y,
+                    x2: offset_max.x,
+                    y2: offset_max.y,
+                    granularity: self.mosaic_granularity,
                 };
                 preview.render(ui, image_rect, scale);
             }
@@ -730,6 +792,11 @@ impl AnnotoApp {
                         CanvasItem::FilledRect(rect) => rect.draw_on_pixmap(&mut pixmap),
                         CanvasItem::Arrow(arrow) => arrow.draw_on_pixmap(&mut pixmap),
                         CanvasItem::Line(line) => line.draw_on_pixmap(&mut pixmap),
+                        CanvasItem::Mosaic(mosaic) => {
+                            if let Some(image_bytes) = &self.image_bytes {
+                                mosaic.draw_on_pixmap(&mut pixmap, image_bytes);
+                            }
+                        }
                     }
                 }
                 // Convert pixmap to RgbaImage
@@ -827,6 +894,10 @@ impl AnnotoApp {
                 }
                 if let Some(r) = item.get_rounding() {
                     self.rounding = r;
+                }
+                // Mosaic granularity
+                if let CanvasItem::Mosaic(mosaic) = item {
+                    self.mosaic_granularity = mosaic.get_granularity();
                 }
             }
         }
