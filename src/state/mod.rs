@@ -4,7 +4,7 @@ pub mod ui_state;
 
 pub use drawing_state::DrawingState;
 pub use selection_state::SelectionState;
-pub use ui_state::{TouchPoint, UiState};
+pub use ui_state::{ExportResizeMode, TouchPoint, UiState};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppMode {

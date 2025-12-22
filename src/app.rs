@@ -335,10 +335,13 @@ impl AnnotoApp {
     fn export_image(&self) {
         web_sys::console::log_1(&"Exporting image".into());
         if let Some(image_bytes) = &self.image_bytes {
-            match ImageExporter::export_image(
+            match ImageExporter::export_image_with_resize(
                 image_bytes,
                 &self.rectangles,
                 &self.ui_state.export_format,
+                self.ui_state.export_resize_mode,
+                self.ui_state.export_resize_percentage,
+                self.ui_state.export_resize_pixels,
             ) {
                 Ok(data) => {
                     DownloadHandler::download_image(
